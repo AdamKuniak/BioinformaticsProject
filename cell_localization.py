@@ -22,7 +22,7 @@ class AttentionPooling(nn.Module):
         raw_scores = embeddings @ self.learnable_vector.T.squeeze(-1)
 
         smoothed_scores = nn.functional.conv1d(raw_scores.unsqueeze(1), self.gaussian_filter, padding=2)
-        smoothed_scores = smoothed_scores.squeeze(1) # [batch, seq_len]
+        smoothed_scores = smoothed_scores.squeeze(1)  # [batch, seq_len]
         smoothed_scores = smoothed_scores.masked_fill(mask=mask, value=-1e9)
 
         # Softmax to get attention weights
