@@ -1,7 +1,9 @@
+from typing import Dict
+
 import pandas as pd
 import torch
 
-class ProteinDataset(torch.utils.data.Dataset):
+class ProteinLocalizationDataset(torch.utils.data.Dataset):
     def __init__(self, tokenizer, root="./data/deep_loc_2_0", partition=None, max_length=1024):
         super().__init__()
         dataset = pd.read_csv(root + "/Swissprot_Train_Validation_dataset.csv", sep=",")
@@ -17,7 +19,7 @@ class ProteinDataset(torch.utils.data.Dataset):
     def __len__(self) -> int:
         return len(self.sequences)
 
-    def __getitem__(self, index: int):
+    def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
         seq = self.sequences[index]
         tokenized_seq = self.tokenizer(
             seq,
