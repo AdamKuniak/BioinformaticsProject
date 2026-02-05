@@ -1,7 +1,10 @@
+from torch.utils.data import DataLoader
 from transformers import EsmModel, AutoTokenizer
 import torch
 import torch.nn as nn
-import numpy as np
+from torchmetrics import MetricCollection, MatthewsCorrCoef, JaccardIndex, F1Score, Accuracy
+from data_utils import ProteinLocalizationDataset
+from focal_loss import MultiLabelFocalLoss
 
 class AttentionPooling(nn.Module):
     def __init__(self, hidden_size):
@@ -60,8 +63,83 @@ class ProteinLocalizator(nn.Module):
 
         return logits, att_weights
 
+def train_one_epoch(model, criterion, optimizer, train_loader, train_metrics):
+    model.train()
+    total_loss = 0.0
+
+    for batch in train_loader:
+        data = batch["input_ids"]
+        mask = batch["attention_mask"]
+        labels = batch["label"]
+        # clear gradients
+        optimizer.zero_grad()
+        # forward pass
+        logits, _ = model(data, mask)
+        # Loss
+        loss = criterion(logits, labels)
+        # backward pas
+        loss.backward()
+        optimizer.step()
+        # update metrics
+        preds = torch.sigmoid(logits)
+        train_metrics.update(preds, labels)
+        total_loss += loss.item()
+
+    results = train_metrics.compute()
+    avg_loss = total_loss / len(train_loader)
+    train_metrics.reset()
+
+    return avg_loss, results
+
 def main():
-    print("Working on it!")
+    tokenizer = AutoTokenizer.from_pretrained("facebook/esm2_t33_650M_UR50D")
+    model = ProteinLocalizator()
+    # Freeze the ESM-2 backbone, I want to train only the AttentionPooling and the classifier head
+    for param in model.backbone.parameters():
+        param.requires_grad = False
+
+    train_split = [1, 2, 3, 4]
+    val_split = [0]
+    # Create datasets
+    train_dataset = ProteinLocalizationDataset(tokenizer, train_split)
+    val_dataset = ProteinLocalizationDataset(tokenizer, val_split)
+
+    # Get the class weights by extracting inverse frequencies
+    counts = train_dataset.labels.sum(axis=0)
+    total = len(train_dataset)
+    inverse_frequencies = total / counts
+    class_weights = torch.tensor(inverse_frequencies, dtype=torch.float)
+    # Normalize
+    class_weights = class_weights / class_weights.mean()
+    # criterion
+    criterion = MultiLabelFocalLoss(alphas=class_weights)
+
+    # Wrap them with dataloader
+    train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=8, shuffle=False)
+
+    warmup_epochs = 5
+    total_epochs = 25
+    lr = 0.001
+    # label_smoothing =
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
+    # warmup scheduler for easy start
+    warmup_scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.01, end_factor=1.0, total_iters=warmup_epochs)
+    train_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_epochs - warmup_epochs)
+    scheduler = torch.optim.lr_scheduler.SequentialLR(optimizer, schedulers=[warmup_scheduler, train_scheduler], milestones=[warmup_epochs])
+
+    # Metrics to calculate; accuracy and mcc is per label
+    metrics = MetricCollection({
+        "accuracy": Accuracy(task="multilabel", num_labels=10, subset_accuracy="True", average=None),
+        "jaccard": JaccardIndex(task="multilabel", num_labels=10),
+        "mcc": MatthewsCorrCoef(task="multilabel", num_labels=10, average=None),
+        "f1_macro": F1Score(task="multilabel", num_labels=10, average="macro")
+    })
+    train_metrics = metrics.clone(prefix="train_")
+    val_metrics = metrics.clone(prefix="val_")
+
+    for i in range(total_epochs):
+        train_one_epoch(model, criterion, optimizer, train_loader)
 
 if __name__ == '__main__':
     main()
