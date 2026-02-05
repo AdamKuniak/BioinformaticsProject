@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-class WeightedFocalLoss(nn.Module):
+class MultiLabelFocalLoss(nn.Module):
     def __init__(self, alphas=None, gamma=1.0):
         super().__init__()
         self.gamma = gamma
