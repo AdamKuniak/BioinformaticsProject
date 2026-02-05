@@ -17,7 +17,7 @@ class AttentionPooling(nn.Module):
         filter = filter.view(1, 1, -1)  # conv1d expects dimensions [in_channels, out_channels, width]
         self.register_buffer("gaussian_filter", filter)
 
-    def forward(self, embeddings : torch.Tensor, mask : torch.Tensor) -> torch.Tensor:
+    def forward(self, embeddings : torch.Tensor, mask : torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         assert embeddings.shape[2] == self.learnable_vector.T.shape[0], f"Dimension mismatch: {embeddings.shape[2]} != {self.learnable_vector.T.shape[0]}"
         raw_scores = embeddings @ self.learnable_vector.T.squeeze(-1)
 
@@ -31,7 +31,7 @@ class AttentionPooling(nn.Module):
         # The weighted sum
         final_representation = torch.bmm(attention_weights.unsqueeze(1), embeddings)
 
-        return final_representation
+        return final_representation, attention_weights
 
 
 class ProteinLocalizator(nn.Module):
@@ -40,6 +40,25 @@ class ProteinLocalizator(nn.Module):
         # Pretrained backbone, ESM-2 model
         self.backbone = EsmModel.from_pretrained(model_name)
         self.embedding_size = self.backbone.config.hidden_size
+        self.hidden_size = 128
+        self.dropout_prob = 0.1
+
+        self.attention_pooling = AttentionPooling(self.embedding_size)
+
+        self.classifier_head = nn.Sequential(
+            nn.Linear(in_features=self.embedding_size, out_features=self.hidden_size),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=self.dropout_prob),
+            nn.Linear(in_features=self.hidden_size, out_features=num_labels)
+        )
+
+    def forward(self, x : torch.Tensor, attention_mask : torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        outputs = self.backbone(input_ids=x, attention_mask=attention_mask)
+        embeddings = outputs.last_hidden_state
+        pooled_embedding, att_weights = self.attention_pooling(embeddings, attention_mask)
+        logits = self.classifier_head(pooled_embedding)
+
+        return logits, att_weights
 
 def main():
     print("Working on it!")
