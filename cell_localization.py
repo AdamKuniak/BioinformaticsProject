@@ -69,6 +69,7 @@ class ProteinLocalizator(nn.Module):
 
 def train_one_epoch(model, criterion, optimizer, train_loader, train_metrics):
     model.train()
+    model.backbone.eval()
     total_loss = 0.0
 
     for batch in train_loader:
@@ -101,7 +102,8 @@ def evaluate(model, val_loader, criterion, val_metrics):
 def main():
     tokenizer = AutoTokenizer.from_pretrained("facebook/esm2_t33_650M_UR50D")
     model = ProteinLocalizator()
-    # Freeze the ESM-2 backbone, I want to train only the AttentionPooling and the classifier head
+    # Freeze the ESM-2 backbone and set to eval, I want to train only the AttentionPooling and the classifier head
+    model.backbone.eval()
     for param in model.backbone.parameters():
         param.requires_grad = False
 
