@@ -119,6 +119,8 @@ def evaluate(model, loader, criterion, metrics):
 
 def print_metrics(epoch, total_epochs, loss, results, dataset="train" or "dev" or "test"):
     prefix = ""
+    compartments = ["Cytoplasm", "Nucleus", "Extracellular", "Cell membrane", "Mitochondrion", "Plastid", "Endoplasmic reticulum", "Lysosome/Vacuole", "Golgi apparatus", "Peroxisome"]
+
     if dataset == "train":
         print("Results for training set")
         prefix = "train_"
@@ -132,12 +134,16 @@ def print_metrics(epoch, total_epochs, loss, results, dataset="train" or "dev" o
 
     print(f"Epoch: {epoch + 1}/{total_epochs}\n"
           f"Loss: {loss:.4f}\n"
-          f"Macro MCC: {results[f'{prefix}mcc_macro']:.4f}\n"
-          f"MCC per class: {results[f'{prefix}mcc_per_class']:.4f}\n"
           f"Accuracy: {results[f'{prefix}accuracy']:.4f}\n"
           f"F1: {results[f'{prefix}f1_macro']:.4f}\n"
           f"Jaccard: {results[f'{prefix}jaccard']:.4f}\n"
+          f"Macro MCC: {results[f'{prefix}mcc_macro']:.4f}\n"
           )
+
+    if dataset == "train" or dataset == "dev":
+        for name, score in zip(compartments, results[f'{prefix}mcc_per_class']):
+            print(f"{name}: {score:.4f}")
+
 
 def main():
     tokenizer = AutoTokenizer.from_pretrained("facebook/esm2_t33_650M_UR50D")
@@ -187,13 +193,23 @@ def main():
     train_metrics = metrics.clone(prefix="train_")
     dev_metrics = metrics.clone(prefix="dev_")
 
+    best_mcc = -1
     for i in range(total_epochs):
         train_loss, train_metrics = train_one_epoch(model, criterion, optimizer, train_loader, train_metrics)
         scheduler.step()
 
         print_metrics(i, total_epochs, train_loss, train_metrics, dataset="train")
         dev_loss, dev_metrics = evaluate(model, dev_loader, criterion, dev_metrics)
-        print_metrics(i, total_epochs, dev_loss, dev_metrics, dataset="dev")
+
+        if dev_metrics["dev_mcc_macro"] > best_mcc:
+            print_metrics(i, total_epochs, dev_loss, dev_metrics, dataset="dev")
+            best_mcc = dev_metrics["dev_mcc_macro"]
+            torch.save({
+                'epoch': i,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'best_mcc': best_mcc,
+            }, "best_protein_model.pt")
 
 
 if __name__ == '__main__':
