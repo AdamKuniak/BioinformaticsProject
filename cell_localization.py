@@ -3,7 +3,8 @@ from transformers import EsmModel, AutoTokenizer
 import torch
 import torch.nn as nn
 import torchmetrics
-from torchmetrics import MetricCollection, MatthewsCorrCoef, JaccardIndex, F1Score, Accuracy
+from torchmetrics import MetricCollection, MatthewsCorrCoef, JaccardIndex, F1Score
+from torchmetrics.classification import MultilabelAccuracy, MultilabelExactMatch
 from data_utils import ProteinLocalizationDataset
 from focal_loss import MultiLabelFocalLoss
 
@@ -58,7 +59,7 @@ class ProteinLocalizator(nn.Module):
 
     def forward(self, x: torch.Tensor, attention_mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         # Frozen backbone
-        with torch.inference_mode():
+        with torch.no_grad():
             outputs = self.backbone(input_ids=x, attention_mask=attention_mask)
 
             embeddings = outputs.last_hidden_state # Shape: [Batch, Seq, 1280]
@@ -100,6 +101,9 @@ def train_one_epoch(model, criterion, optimizer, train_loader, train_metrics):
 def evaluate(model, loader, criterion, metrics):
     model.eval()
     total_loss = 0.0
+    all_preds = []
+    all_labels = []
+
     with torch.inference_mode():
         for batch in loader:
             data = batch["input_ids"]
@@ -109,12 +113,28 @@ def evaluate(model, loader, criterion, metrics):
             logits, _ = model(data, mask)
             loss = criterion(logits, labels)
             total_loss += loss.item()
+
             preds = torch.sigmoid(logits)
+
             metrics.update(preds, labels)
+
+            all_preds.append(preds)
+            all_labels.append(labels)
 
         results = metrics.compute()
         avg_loss = total_loss / len(loader)
         metrics.reset()
+
+        all_preds = torch.cat(all_preds, dim=0)
+        all_labels = torch.cat(all_labels, dim=0)
+        opt_thresholds = find_optimal_thresholds(all_preds, all_labels)
+
+        binary_preds = (all_preds >= opt_thresholds).long()
+        mcc_per_class = torchmetrics.functional.matthews_corrcoef(binary_preds, all_labels.long(), task="multilabel", num_labels=10)
+
+        results["dev_mcc_macro"] = mcc_per_class.mean().item()  # Overwrite with the better score
+        results["dev_mcc_per_class"] = mcc_per_class.tolist()  # MCC per class
+        results["dev_thresholds"] = opt_thresholds
 
     return avg_loss, results
 
@@ -135,20 +155,24 @@ def print_metrics(epoch, total_epochs, loss, results, dataset="train" or "dev" o
 
     print(f"Epoch: {epoch + 1}/{total_epochs}\n"
           f"Loss: {loss:.4f}\n"
-          f"Accuracy: {results[f'{prefix}accuracy']:.4f}\n"
+          f"Exact_acc: {results[f'{prefix}exact_match_acc']:.4f}\n"
           f"F1: {results[f'{prefix}f1_macro']:.4f}\n"
           f"Jaccard: {results[f'{prefix}jaccard']:.4f}\n"
-          f"Macro MCC: {results[f'{prefix}mcc_macro']:.4f}\n"
+          f"MCC: {results[f'{prefix}mcc']:.4f}\n"
           )
 
     if dataset == "train" or dataset == "dev":
+        print("MCC per class")
+        for name, score in zip(compartments, results[f'{prefix}mcc_per_class']):
+            print(f"{name}: {score:.4f}")
+        print("Thresholds")
         for name, score in zip(compartments, results[f'{prefix}mcc_per_class']):
             print(f"{name}: {score:.4f}")
 
-def find_optimal_thresholds(all_preds: torch.Tensor, all_labels: torch.Tensor, num_labels: int):
+def find_optimal_thresholds(all_preds: torch.Tensor, all_labels: torch.Tensor, num_labels=10):
     optimal_thresholds = torch.zeros(num_labels)
 
-    thresholds_to_test = torch.linspace(0.05, 0.95, 90)
+    thresholds_range = torch.linspace(0.05, 0.95, 90)
 
     for class_idx in range(num_labels):
         best_mcc_for_class = -1.0
@@ -158,7 +182,7 @@ def find_optimal_thresholds(all_preds: torch.Tensor, all_labels: torch.Tensor, n
         class_preds = all_preds[:, class_idx]
         class_labels = all_labels[:, class_idx]
 
-        for threshold in thresholds_to_test:
+        for threshold in thresholds_range:
             binary_preds = (class_preds >= threshold).long()
 
             # MCC for this class
@@ -204,8 +228,8 @@ def main():
     train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True)
     dev_loader = DataLoader(dev_dataset, batch_size=8, shuffle=False)
 
-    warmup_epochs = 5
-    total_epochs = 25
+    warmup_epochs = 1
+    total_epochs = 1
     lr = 0.001
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
     # warmup scheduler for easy start
@@ -215,10 +239,9 @@ def main():
 
     # Metrics to calculate; accuracy and mcc is per label
     metrics = MetricCollection({
-        "accuracy": Accuracy(task="multilabel", num_labels=10, subset_accuracy="False", average=None),
+        "exact_match_acc": MultilabelExactMatch(num_labels=10),
         "jaccard": JaccardIndex(task="multilabel", num_labels=10),
-        "mcc_per_class": MatthewsCorrCoef(task="multilabel", num_labels=10, average=None),
-        "mcc_macro": MatthewsCorrCoef(task="multilabel", num_labels=10, average="macro"),
+        "mcc": MatthewsCorrCoef(task="multilabel", num_labels=10),
         "f1_macro": F1Score(task="multilabel", num_labels=10, average="macro")
     })
     train_metrics = metrics.clone(prefix="train_")
@@ -240,6 +263,7 @@ def main():
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'metrics': dev_metrics,
+                'thresholds': dev_metrics['dev_thresholds']
             }, "best_model.pt")
 
 
