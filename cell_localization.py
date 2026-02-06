@@ -2,6 +2,7 @@ from torch.utils.data import DataLoader
 from transformers import EsmModel, AutoTokenizer
 import torch
 import torch.nn as nn
+import torchmetrics
 from torchmetrics import MetricCollection, MatthewsCorrCoef, JaccardIndex, F1Score, Accuracy
 from data_utils import ProteinLocalizationDataset
 from focal_loss import MultiLabelFocalLoss
@@ -144,8 +145,38 @@ def print_metrics(epoch, total_epochs, loss, results, dataset="train" or "dev" o
         for name, score in zip(compartments, results[f'{prefix}mcc_per_class']):
             print(f"{name}: {score:.4f}")
 
+def find_optimal_thresholds(all_preds: torch.Tensor, all_labels: torch.Tensor, num_labels: int):
+    optimal_thresholds = torch.zeros(num_labels)
+
+    thresholds_to_test = torch.linspace(0.05, 0.95, 90)
+
+    for class_idx in range(num_labels):
+        best_mcc_for_class = -1.0
+        best_threshold_for_class = 0.5  # Default if no better found
+
+        # predictions and labels for the current class
+        class_preds = all_preds[:, class_idx]
+        class_labels = all_labels[:, class_idx]
+
+        for threshold in thresholds_to_test:
+            binary_preds = (class_preds >= threshold).long()
+
+            # MCC for this class
+            # ensure at least one positive and one negative prediction and label, so MCC valid
+            if binary_preds.sum() > 0 and (1 - binary_preds).sum() > 0 and class_labels.sum() > 0 and (1 - class_labels).sum() > 0:
+                current_mcc = torchmetrics.functional.matthews_corrcoef(binary_preds, class_labels.long(), task="binary")
+
+                if current_mcc > best_mcc_for_class:
+                    best_mcc_for_class = current_mcc
+                    best_threshold_for_class = threshold
+
+        optimal_thresholds[class_idx] = best_threshold_for_class
+
+    return optimal_thresholds
 
 def main():
+    # set a seed for reproducibility
+    torch.manual_seed(42)
     tokenizer = AutoTokenizer.from_pretrained("facebook/esm2_t33_650M_UR50D")
     model = ProteinLocalizator()
     # Freeze the ESM-2 backbone and set to eval, I want to train only the AttentionPooling and the classifier head
@@ -208,8 +239,8 @@ def main():
                 'epoch': i,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
-                'best_mcc': best_mcc,
-            }, "best_protein_model.pt")
+                'metrics': dev_metrics,
+            }, "best_model.pt")
 
 
 if __name__ == '__main__':
