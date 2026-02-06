@@ -55,9 +55,13 @@ class ProteinLocalizator(nn.Module):
             nn.Linear(in_features=self.hidden_size, out_features=num_labels)
         )
 
-    def forward(self, x : torch.Tensor, attention_mask : torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        outputs = self.backbone(input_ids=x, attention_mask=attention_mask)
-        embeddings = outputs.last_hidden_state
+    def forward(self, x: torch.Tensor, attention_mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        # Frozen backbone
+        with torch.inference_mode():
+            outputs = self.backbone(input_ids=x, attention_mask=attention_mask)
+
+            embeddings = outputs.last_hidden_state # Shape: [Batch, Seq, 1280]
+        # Learnable parts
         pooled_embedding, att_weights = self.attention_pooling(embeddings, attention_mask)
         logits = self.classifier_head(pooled_embedding)
 
@@ -91,6 +95,9 @@ def train_one_epoch(model, criterion, optimizer, train_loader, train_metrics):
 
     return avg_loss, results
 
+def evaluate(model, val_loader, criterion, val_metrics):
+    model.eval()
+
 def main():
     tokenizer = AutoTokenizer.from_pretrained("facebook/esm2_t33_650M_UR50D")
     model = ProteinLocalizator()
@@ -121,7 +128,6 @@ def main():
     warmup_epochs = 5
     total_epochs = 25
     lr = 0.001
-    # label_smoothing =
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
     # warmup scheduler for easy start
     warmup_scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.01, end_factor=1.0, total_iters=warmup_epochs)
@@ -139,7 +145,14 @@ def main():
     val_metrics = metrics.clone(prefix="val_")
 
     for i in range(total_epochs):
-        train_one_epoch(model, criterion, optimizer, train_loader)
+        avg_loss, results = train_one_epoch(model, criterion, optimizer, train_loader, train_metrics)
+        print(f"Epoch: {i+1}/{total_epochs}\n"
+              f"Train Loss: {avg_loss:.4f}\n"
+              f"MCC: {results['mcc']:.4f}\n"
+              f"Accuracy: {results['accuracy']:.4f}\n"
+              f"F1: {results['f1_macro']:.4f}\n"
+              f"Jaccard: {results['jaccard']:.4f}\n"
+        )
 
 if __name__ == '__main__':
     main()
