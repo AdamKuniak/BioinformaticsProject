@@ -98,6 +98,24 @@ def train_one_epoch(model, criterion, optimizer, train_loader, train_metrics):
 
 def evaluate(model, val_loader, criterion, val_metrics):
     model.eval()
+    total_loss = 0.0
+    with torch.inference_mode():
+        for batch in val_loader:
+            data = batch["input_ids"]
+            mask = batch["attention_mask"]
+            labels = batch["label"]
+
+            logits, _ = model(data, mask)
+            loss = criterion(logits, labels)
+            total_loss += loss.item()
+            preds = torch.sigmoid(logits)
+            val_metrics.update(preds, labels)
+
+        results = val_metrics.compute()
+        avg_loss = total_loss / len(val_loader)
+        val_metrics.reset()
+
+    return avg_loss, results
 
 def main():
     tokenizer = AutoTokenizer.from_pretrained("facebook/esm2_t33_650M_UR50D")
