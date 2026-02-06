@@ -96,11 +96,11 @@ def train_one_epoch(model, criterion, optimizer, train_loader, train_metrics):
 
     return avg_loss, results
 
-def evaluate(model, dev_loader, criterion, dev_metrics):
+def evaluate(model, loader, criterion, metrics):
     model.eval()
     total_loss = 0.0
     with torch.inference_mode():
-        for batch in dev_loader:
+        for batch in loader:
             data = batch["input_ids"]
             mask = batch["attention_mask"]
             labels = batch["label"]
@@ -109,11 +109,11 @@ def evaluate(model, dev_loader, criterion, dev_metrics):
             loss = criterion(logits, labels)
             total_loss += loss.item()
             preds = torch.sigmoid(logits)
-            dev_metrics.update(preds, labels)
+            metrics.update(preds, labels)
 
-        results = dev_metrics.compute()
-        avg_loss = total_loss / len(dev_loader)
-        dev_metrics.reset()
+        results = metrics.compute()
+        avg_loss = total_loss / len(loader)
+        metrics.reset()
 
     return avg_loss, results
 
@@ -132,7 +132,8 @@ def print_metrics(epoch, total_epochs, loss, results, dataset="train" or "dev" o
 
     print(f"Epoch: {epoch + 1}/{total_epochs}\n"
           f"Loss: {loss:.4f}\n"
-          f"MCC: {results[f'{prefix}mcc']:.4f}\n"
+          f"Macro MCC: {results[f'{prefix}mcc_macro']:.4f}\n"
+          f"MCC per class: {results[f'{prefix}mcc_per_class']:.4f}\n"
           f"Accuracy: {results[f'{prefix}accuracy']:.4f}\n"
           f"F1: {results[f'{prefix}f1_macro']:.4f}\n"
           f"Jaccard: {results[f'{prefix}jaccard']:.4f}\n"
@@ -177,9 +178,10 @@ def main():
 
     # Metrics to calculate; accuracy and mcc is per label
     metrics = MetricCollection({
-        "accuracy": Accuracy(task="multilabel", num_labels=10, subset_accuracy="True", average=None),
+        "accuracy": Accuracy(task="multilabel", num_labels=10, subset_accuracy="False", average=None),
         "jaccard": JaccardIndex(task="multilabel", num_labels=10),
-        "mcc": MatthewsCorrCoef(task="multilabel", num_labels=10, average=None),
+        "mcc_per_class": MatthewsCorrCoef(task="multilabel", num_labels=10, average=None),
+        "mcc_macro": MatthewsCorrCoef(task="multilabel", num_labels=10, average="macro"),
         "f1_macro": F1Score(task="multilabel", num_labels=10, average="macro")
     })
     train_metrics = metrics.clone(prefix="train_")
