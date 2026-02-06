@@ -96,11 +96,11 @@ def train_one_epoch(model, criterion, optimizer, train_loader, train_metrics):
 
     return avg_loss, results
 
-def evaluate(model, val_loader, criterion, val_metrics):
+def evaluate(model, dev_loader, criterion, dev_metrics):
     model.eval()
     total_loss = 0.0
     with torch.inference_mode():
-        for batch in val_loader:
+        for batch in dev_loader:
             data = batch["input_ids"]
             mask = batch["attention_mask"]
             labels = batch["label"]
@@ -109,13 +109,34 @@ def evaluate(model, val_loader, criterion, val_metrics):
             loss = criterion(logits, labels)
             total_loss += loss.item()
             preds = torch.sigmoid(logits)
-            val_metrics.update(preds, labels)
+            dev_metrics.update(preds, labels)
 
-        results = val_metrics.compute()
-        avg_loss = total_loss / len(val_loader)
-        val_metrics.reset()
+        results = dev_metrics.compute()
+        avg_loss = total_loss / len(dev_loader)
+        dev_metrics.reset()
 
     return avg_loss, results
+
+def print_metrics(epoch, total_epochs, loss, results, dataset="train" or "dev" or "test"):
+    prefix = ""
+    if dataset == "train":
+        print("Results for training set")
+        prefix = "train_"
+    elif dataset == "dev":
+        print("Results for developer set")
+        prefix = "dev_"
+    elif dataset == "test":
+        print("Results for test set")
+    else:
+        raise ValueError("Dataset must be 'train' or 'dev' or 'test'")
+
+    print(f"Epoch: {epoch + 1}/{total_epochs}\n"
+          f"Loss: {loss:.4f}\n"
+          f"MCC: {results[f'{prefix}mcc']:.4f}\n"
+          f"Accuracy: {results[f'{prefix}accuracy']:.4f}\n"
+          f"F1: {results[f'{prefix}f1_macro']:.4f}\n"
+          f"Jaccard: {results[f'{prefix}jaccard']:.4f}\n"
+          )
 
 def main():
     tokenizer = AutoTokenizer.from_pretrained("facebook/esm2_t33_650M_UR50D")
@@ -126,10 +147,10 @@ def main():
         param.requires_grad = False
 
     train_split = [1, 2, 3, 4]
-    val_split = [0]
+    dev_split = [0]
     # Create datasets
     train_dataset = ProteinLocalizationDataset(tokenizer, train_split)
-    val_dataset = ProteinLocalizationDataset(tokenizer, val_split)
+    dev_dataset = ProteinLocalizationDataset(tokenizer, dev_split)
 
     # Get the class weights by extracting inverse frequencies
     counts = train_dataset.labels.sum(axis=0)
@@ -143,7 +164,7 @@ def main():
 
     # Wrap them with dataloader
     train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=8, shuffle=False)
+    dev_loader = DataLoader(dev_dataset, batch_size=8, shuffle=False)
 
     warmup_epochs = 5
     total_epochs = 25
@@ -162,17 +183,16 @@ def main():
         "f1_macro": F1Score(task="multilabel", num_labels=10, average="macro")
     })
     train_metrics = metrics.clone(prefix="train_")
-    val_metrics = metrics.clone(prefix="val_")
+    dev_metrics = metrics.clone(prefix="dev_")
 
     for i in range(total_epochs):
-        avg_loss, results = train_one_epoch(model, criterion, optimizer, train_loader, train_metrics)
-        print(f"Epoch: {i+1}/{total_epochs}\n"
-              f"Train Loss: {avg_loss:.4f}\n"
-              f"MCC: {results['mcc']:.4f}\n"
-              f"Accuracy: {results['accuracy']:.4f}\n"
-              f"F1: {results['f1_macro']:.4f}\n"
-              f"Jaccard: {results['jaccard']:.4f}\n"
-        )
+        train_loss, train_metrics = train_one_epoch(model, criterion, optimizer, train_loader, train_metrics)
+        scheduler.step()
+
+        print_metrics(i, total_epochs, train_loss, train_metrics, dataset="train")
+        dev_loss, dev_metrics = evaluate(model, dev_loader, criterion, dev_metrics)
+        print_metrics(i, total_epochs, dev_loss, dev_metrics, dataset="dev")
+
 
 if __name__ == '__main__':
     main()
