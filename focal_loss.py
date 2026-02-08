@@ -11,7 +11,8 @@ class MultiLabelFocalLoss(nn.Module):
     def forward(self, logits, targets):
         # shape[batch, num_classes]
         # reduction="none", I want to average after I add focal factor and weights
-        bce_loss = F.binary_cross_entropy_with_logits(logits, targets, reduction="none")  # -log(p) for every class, where p is the probability of label being correct
+        # logits are shape [batch, 1, num_labels]
+        bce_loss = F.binary_cross_entropy_with_logits(logits.squeeze(1), targets, reduction="none")  # -log(p) for every class, where p is the probability of label being correct
         # Calculate probabilities
         probs = torch.sigmoid(logits)
         pt = torch.where(targets == 1, probs, 1 - probs)
