@@ -285,7 +285,6 @@ def main():
         }
 
         # Per-Class MCCs to the log
-        # This creates a separate section in W&B to see how each structure is performing
         for name, score in zip(compartments, dev_results["dev_mcc_per_class"]):
             metrics_to_log[f"val_per_class_mcc/{name}"] = score
 
