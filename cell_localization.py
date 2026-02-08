@@ -8,6 +8,7 @@ from torchmetrics import MetricCollection, MatthewsCorrCoef, JaccardIndex, F1Sco
 from torchmetrics.classification import MultilabelExactMatch
 from data_utils import ProteinLocalizationDataset
 from focal_loss import MultiLabelFocalLoss
+import numpy as np
 
 class AttentionPooling(nn.Module):
     def __init__(self, hidden_size):
@@ -140,37 +141,6 @@ def evaluate(model: nn.Module, loader: DataLoader, criterion: nn.Module, metrics
 
     return avg_loss, results
 
-def print_metrics(epoch: int, total_epochs: int, loss: float, results: dict, dataset="train", log_file="training_log.txt"):
-    prefix = "train_" if dataset == "train" else "dev_" if dataset == "dev" else "test_"
-    compartments = ["Cytoplasm", "Nucleus", "Extracellular", "Cell membrane", "Mitochondrion", "Plastid", "Endoplasmic reticulum", "Lysosome/Vacuole", "Golgi apparatus", "Peroxisome"]
-
-    if dataset == "train":
-        print("Results for training set")
-        prefix = "train_"
-    elif dataset == "dev":
-        print("Results for developer set")
-        prefix = "dev_"
-    elif dataset == "test":
-        print("Results for test set")
-    else:
-        raise ValueError("Dataset must be 'train' or 'dev' or 'test'")
-
-    print(f"Epoch: {epoch + 1}/{total_epochs}\n"
-          f"Loss: {loss:.4f}\n"
-          f"Exact_acc: {results[f'{prefix}exact_match_acc']:.4f}\n"
-          f"F1: {results[f'{prefix}f1_macro']:.4f}\n"
-          f"Jaccard: {results[f'{prefix}jaccard']:.4f}\n"
-          f"MCC: {results[f'{prefix}mcc']:.4f}\n"
-          )
-
-    if dataset == "train" or dataset == "dev":
-        print("MCC per class")
-        for name, score in zip(compartments, results[f'{prefix}mcc_per_class']):
-            print(f"{name}: {score:.4f}")
-        print("Thresholds")
-        for name, score in zip(compartments, results[f'{prefix}thresholds']):
-            print(f"{name}: {score:.4f}")
-
 def find_optimal_thresholds(all_preds: torch.Tensor, all_labels: torch.Tensor, num_labels=10):
     optimal_thresholds = torch.zeros(num_labels)
 
@@ -202,46 +172,132 @@ def find_optimal_thresholds(all_preds: torch.Tensor, all_labels: torch.Tensor, n
 
     return optimal_thresholds
 
+
+def print_final_summary(all_fold_results):
+    metrics_to_report = ["dev_mcc_macro", "dev_exact_match_acc", "dev_f1_macro", "dev_jaccard"]
+
+    print(f"\n{'#' * 20} FINAL 5-FOLD CROSS-VALIDATION RESULTS {'#' * 20}")
+    for m in metrics_to_report:
+        values = [res[m] for res in all_fold_results]
+        mean = np.mean(values)
+        std = np.std(values)
+        print(f"{m}: {mean:.4f} +/- {std:.4f}")
+
+    # Per-Class Summary
+    compartments = ["Cytoplasm", "Nucleus", "Extracellular", "Cell membrane", "Mitochondrion", "Plastid", "Endoplasmic reticulum", "Lysosome/Vacuole", "Golgi apparatus", "Peroxisome"]
+
+    print("\nPer-Class MCC (Mean +/- Std):")
+    # all_fold_results[fold]["dev_mcc_per_class"] is a list of 10
+    for i, name in enumerate(compartments):
+        class_scores = [res["dev_mcc_per_class"][i] for res in all_fold_results]
+        print(f"  {name:25}: {np.mean(class_scores):.4f} +/- {np.std(class_scores):.4f}")
+
+def test_all_splits(tokenizer, metrics, batch_size=64, warmup_epochs=5, total_epochs=25, lr=0.001, weight_decay=0.01):
+    partitions = [0, 1, 2, 3, 4]
+    all_fold_results = []
+
+    for p in partitions:
+        print(f"\n{'='*20} STARTING FOLD {p} {'='*20}")
+
+        # Initialize model
+        model = ProteinLocalizator()
+        # Freeze backbone
+        model.backbone.eval()
+        for param in model.backbone.parameters():
+            param.requires_grad = False
+
+        # 2. Correct Partition Slicing
+        train_folds = [f for f in partitions if f != p]
+        dev_folds = [p]
+
+        # Create datasets
+        train_dataset = ProteinLocalizationDataset(tokenizer, train_folds)
+        dev_dataset = ProteinLocalizationDataset(tokenizer, dev_folds)
+
+        # Get the class weights by extracting inverse frequencies
+        counts = train_dataset.labels.sum(axis=0)
+        total = len(train_dataset)
+        inverse_frequencies = total / counts
+        class_weights = torch.tensor(inverse_frequencies, dtype=torch.float)
+        # Normalize
+        class_weights = class_weights / class_weights.mean()
+        # criterion
+        criterion = MultiLabelFocalLoss(alphas=class_weights)
+
+        # Wrap them with dataloader
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        dev_loader = DataLoader(dev_dataset, batch_size=batch_size, shuffle=False)
+
+        optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+        # warmup scheduler for easy start
+        warmup_scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.01, end_factor=1.0, total_iters=warmup_epochs)
+        train_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_epochs - warmup_epochs)
+        scheduler = torch.optim.lr_scheduler.SequentialLR(optimizer, schedulers=[warmup_scheduler, train_scheduler], milestones=[warmup_epochs])
+
+        train_metrics = metrics.clone(prefix="train_")
+        dev_metrics = metrics.clone(prefix="dev_")
+
+        compartments = ["Cytoplasm", "Nucleus", "Extracellular", "Cell membrane", "Mitochondrion", "Plastid", "Endoplasmic reticulum", "Lysosome/Vacuole", "Golgi apparatus", "Peroxisome"]
+
+        # Set up wandb
+        wandb.init(group="Initial-Benchmark", name=f"fold_{p}", reinit=True)
+        config = wandb.config
+        config.learning_rate = lr
+        config.batch_size = batch_size
+        config.weight_decay = weight_decay
+
+        best_mcc_this_fold = -1
+        best_results_this_fold = None
+        # training loop
+        for i in range(total_epochs):
+            train_loss, train_results = train_one_epoch(model, criterion, optimizer, train_loader, train_metrics)
+            scheduler.step()
+
+            # print_metrics(i, total_epochs, train_loss, train_metrics, dataset="train")
+            dev_loss, dev_results = evaluate(model, dev_loader, criterion, dev_metrics)
+
+            # Wandb log
+            metrics_to_log = {
+                f"epoch": i + 1,
+                "train/loss": train_loss,
+                "train/mcc": train_results["train_mcc"],
+                "train/exact_acc": train_results["train_exact_match_acc"],  # Use whatever key your MetricCollection outputs
+
+                "dev/loss": dev_loss,
+                "dev/mcc_macro": dev_results["dev_mcc"],
+                "dev/exact_acc": dev_results["dev_exact_match_acc"],
+                "dev/f1_macro": dev_results["dev_f1_macro"],
+                "dev/jaccard": dev_results["dev_jaccard"]
+            }
+
+            # Per-Class MCCs to the log
+            for name, score in zip(compartments, dev_results["dev_mcc_per_class"]):
+                metrics_to_log[f"val_per_class_mcc/{name}"] = score
+
+            wandb.log(metrics_to_log)
+
+            if dev_results["dev_mcc_macro"] > best_mcc_this_fold:
+                best_mcc_this_fold = dev_results["dev_mcc_macro"]
+                best_results_this_fold = dev_results
+                print(f"New Best Val MCC: {best_mcc_this_fold:.4f}")
+
+                torch.save({
+                    'epoch': i,
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'metrics': dev_results,
+                    'thresholds': dev_results['dev_thresholds']
+                }, f"best_model_fold_{p}.pt")
+
+            all_fold_results.append(best_results_this_fold)
+            wandb.finish()
+
+        print_final_summary(all_fold_results)
+
 def main():
     # set a seed for reproducibility
     torch.manual_seed(42)
     tokenizer = AutoTokenizer.from_pretrained("facebook/esm2_t33_650M_UR50D")
-    model = ProteinLocalizator()
-    # Freeze the ESM-2 backbone and set to eval, I want to train only the AttentionPooling and the classifier head
-    model.backbone.eval()
-    for param in model.backbone.parameters():
-        param.requires_grad = False
-
-    train_split = [1, 2, 3, 4]
-    dev_split = [0]
-    # Create datasets
-    train_dataset = ProteinLocalizationDataset(tokenizer, train_split)
-    dev_dataset = ProteinLocalizationDataset(tokenizer, dev_split)
-
-    # Get the class weights by extracting inverse frequencies
-    counts = train_dataset.labels.sum(axis=0)
-    total = len(train_dataset)
-    inverse_frequencies = total / counts
-    class_weights = torch.tensor(inverse_frequencies, dtype=torch.float)
-    # Normalize
-    class_weights = class_weights / class_weights.mean()
-    # criterion
-    criterion = MultiLabelFocalLoss(alphas=class_weights)
-
-    # Wrap them with dataloader
-    batch_size = 64
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    dev_loader = DataLoader(dev_dataset, batch_size=batch_size, shuffle=False)
-
-    warmup_epochs = 1
-    total_epochs = 1
-    lr = 0.001
-    weight_decay = 0.01
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-    # warmup scheduler for easy start
-    warmup_scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.01, end_factor=1.0, total_iters=warmup_epochs)
-    train_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_epochs - warmup_epochs)
-    scheduler = torch.optim.lr_scheduler.SequentialLR(optimizer, schedulers=[warmup_scheduler, train_scheduler], milestones=[warmup_epochs])
 
     # Metrics to calculate; accuracy and mcc is per label
     metrics = MetricCollection({
@@ -250,57 +306,9 @@ def main():
         "mcc": MatthewsCorrCoef(task="multilabel", num_labels=10),
         "f1_macro": F1Score(task="multilabel", num_labels=10, average="macro")
     })
-    train_metrics = metrics.clone(prefix="train_")
-    dev_metrics = metrics.clone(prefix="dev_")
 
-    compartments = ["Cytoplasm", "Nucleus", "Extracellular", "Cell membrane", "Mitochondrion", "Plastid", "Endoplasmic reticulum", "Lysosome/Vacuole", "Golgi apparatus", "Peroxisome"]
-
-    # Set up wandb
-    wandb.init()
-    config = wandb.config
-    config.learning_rate = lr
-    config.batch_size = batch_size
-    config.weight_decay = weight_decay
-
-    best_mcc = -1
-    for i in range(total_epochs):
-        train_loss, train_results = train_one_epoch(model, criterion, optimizer, train_loader, train_metrics)
-        scheduler.step()
-
-        # print_metrics(i, total_epochs, train_loss, train_metrics, dataset="train")
-        dev_loss, dev_results = evaluate(model, dev_loader, criterion, dev_metrics)
-
-        # Wandb log
-        metrics_to_log = {
-            "epoch": i + 1,
-            "train/loss": train_loss,
-            "train/mcc": train_results["train_mcc"],
-            "train/exact_acc": train_results["train_exact_match_acc"],  # Use whatever key your MetricCollection outputs
-
-            "dev/loss": dev_loss,
-            "dev/mcc_macro": dev_results["dev_mcc"],
-            "dev/exact_acc": dev_results["dev_exact_match_acc"],
-            "dev/f1_macro": dev_results["dev_f1_macro"],
-            "dev/jaccard": dev_results["dev_jaccard"]
-        }
-
-        # Per-Class MCCs to the log
-        for name, score in zip(compartments, dev_results["dev_mcc_per_class"]):
-            metrics_to_log[f"val_per_class_mcc/{name}"] = score
-
-        wandb.log(metrics_to_log)
-
-        if dev_results["dev_mcc_macro"] > best_mcc:
-            best_mcc = dev_results["dev_mcc_macro"]
-            print(f"New Best Val MCC: {best_mcc:.4f}")
-
-            torch.save({
-                'epoch': i,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'metrics': dev_results,
-                'thresholds': dev_results['dev_thresholds']
-            }, "best_model.pt")
+    # Test all splits
+    test_all_splits(tokenizer, metrics)
 
 
 if __name__ == '__main__':
