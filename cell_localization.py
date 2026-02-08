@@ -2,9 +2,10 @@ from torch.utils.data import DataLoader
 from transformers import EsmModel, AutoTokenizer
 import torch
 import torch.nn as nn
+import wandb
 import torchmetrics
 from torchmetrics import MetricCollection, MatthewsCorrCoef, JaccardIndex, F1Score
-from torchmetrics.classification import MultilabelAccuracy, MultilabelExactMatch
+from torchmetrics.classification import MultilabelExactMatch
 from data_utils import ProteinLocalizationDataset
 from focal_loss import MultiLabelFocalLoss
 
@@ -18,17 +19,17 @@ class AttentionPooling(nn.Module):
         kernel_size = 5
         std = 1
         x = torch.arange(kernel_size) - (kernel_size - 1) // 2  # array [-2, -1, 0, 1, 2]
-        filter = torch.exp(-(x.pow(2)) / (2 * std ** 2))  # Gaussian filter
-        filter = filter.view(1, 1, -1)  # conv1d expects dimensions [in_channels, out_channels, width]
-        self.register_buffer("gaussian_filter", filter)
+        g_filter = torch.exp(-(x.pow(2)) / (2 * std ** 2))  # Gaussian filter
+        g_filter = g_filter.view(1, 1, -1)  # conv1d expects dimensions [in_channels, out_channels, width]
+        self.register_buffer("gaussian_filter", g_filter)
 
-    def forward(self, embeddings : torch.Tensor, mask : torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, embeddings: torch.Tensor, mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         assert embeddings.shape[2] == self.learnable_vector.T.shape[0], f"Dimension mismatch: {embeddings.shape[2]} != {self.learnable_vector.T.shape[0]}"
         raw_scores = embeddings @ self.learnable_vector.T.squeeze(-1)
 
         smoothed_scores = nn.functional.conv1d(raw_scores.unsqueeze(1), self.gaussian_filter, padding=2)
         smoothed_scores = smoothed_scores.squeeze(1)  # [batch, seq_len]
-        smoothed_scores = smoothed_scores.masked_fill(mask=mask, value=-1e9)
+        smoothed_scores = smoothed_scores.masked_fill(mask == 0, value=-1e9)
 
         # Softmax to get attention weights
         attention_weights = nn.functional.softmax(smoothed_scores, dim=-1)
@@ -69,7 +70,7 @@ class ProteinLocalizator(nn.Module):
 
         return logits, att_weights
 
-def train_one_epoch(model, criterion, optimizer, train_loader, train_metrics):
+def train_one_epoch(model: nn.Module, criterion: nn.Module, optimizer: torch.optim, train_loader: DataLoader, train_metrics: MetricCollection):
     model.train()
     model.backbone.eval()
     total_loss = 0.0
@@ -88,8 +89,8 @@ def train_one_epoch(model, criterion, optimizer, train_loader, train_metrics):
         loss.backward()
         optimizer.step()
         # update metrics
-        preds = torch.sigmoid(logits)
-        train_metrics.update(preds, labels)
+        preds = torch.sigmoid(logits).squeeze(1)
+        train_metrics.update(preds, labels.long())
         total_loss += loss.item()
 
     results = train_metrics.compute()
@@ -98,7 +99,7 @@ def train_one_epoch(model, criterion, optimizer, train_loader, train_metrics):
 
     return avg_loss, results
 
-def evaluate(model, loader, criterion, metrics):
+def evaluate(model: nn.Module, loader: DataLoader, criterion: nn.Module, metrics: MetricCollection):
     model.eval()
     total_loss = 0.0
     all_preds = []
@@ -110,6 +111,7 @@ def evaluate(model, loader, criterion, metrics):
             mask = batch["attention_mask"]
             labels = batch["label"]
 
+            # forward pass
             logits, _ = model(data, mask)
             loss = criterion(logits, labels)
             total_loss += loss.item()
@@ -138,8 +140,8 @@ def evaluate(model, loader, criterion, metrics):
 
     return avg_loss, results
 
-def print_metrics(epoch, total_epochs, loss, results, dataset="train" or "dev" or "test"):
-    prefix = ""
+def print_metrics(epoch: int, total_epochs: int, loss: float, results: dict, dataset="train", log_file="training_log.txt"):
+    prefix = "train_" if dataset == "train" else "dev_" if dataset == "dev" else "test_"
     compartments = ["Cytoplasm", "Nucleus", "Extracellular", "Cell membrane", "Mitochondrion", "Plastid", "Endoplasmic reticulum", "Lysosome/Vacuole", "Golgi apparatus", "Peroxisome"]
 
     if dataset == "train":
@@ -166,17 +168,18 @@ def print_metrics(epoch, total_epochs, loss, results, dataset="train" or "dev" o
         for name, score in zip(compartments, results[f'{prefix}mcc_per_class']):
             print(f"{name}: {score:.4f}")
         print("Thresholds")
-        for name, score in zip(compartments, results[f'{prefix}mcc_per_class']):
+        for name, score in zip(compartments, results[f'{prefix}thresholds']):
             print(f"{name}: {score:.4f}")
 
 def find_optimal_thresholds(all_preds: torch.Tensor, all_labels: torch.Tensor, num_labels=10):
     optimal_thresholds = torch.zeros(num_labels)
 
+    # Different thresholds to try for each class
     thresholds_range = torch.linspace(0.05, 0.95, 90)
 
     for class_idx in range(num_labels):
         best_mcc_for_class = -1.0
-        best_threshold_for_class = 0.5  # Default if no better found
+        best_threshold_for_class = 0.5  # Default
 
         # predictions and labels for the current class
         class_preds = all_preds[:, class_idx]
@@ -185,11 +188,12 @@ def find_optimal_thresholds(all_preds: torch.Tensor, all_labels: torch.Tensor, n
         for threshold in thresholds_range:
             binary_preds = (class_preds >= threshold).long()
 
-            # MCC for this class
-            # ensure at least one positive and one negative prediction and label, so MCC valid
+            # MCC for this class with given threshold
+            # ensure at least one positive and one negative prediction and label, so MCC can be valid
             if binary_preds.sum() > 0 and (1 - binary_preds).sum() > 0 and class_labels.sum() > 0 and (1 - class_labels).sum() > 0:
                 current_mcc = torchmetrics.functional.matthews_corrcoef(binary_preds, class_labels.long(), task="binary")
 
+                # update the best threshold if higher MCC achieved
                 if current_mcc > best_mcc_for_class:
                     best_mcc_for_class = current_mcc
                     best_threshold_for_class = threshold
@@ -225,13 +229,15 @@ def main():
     criterion = MultiLabelFocalLoss(alphas=class_weights)
 
     # Wrap them with dataloader
-    train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True)
-    dev_loader = DataLoader(dev_dataset, batch_size=8, shuffle=False)
+    batch_size = 64
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    dev_loader = DataLoader(dev_dataset, batch_size=batch_size, shuffle=False)
 
     warmup_epochs = 1
     total_epochs = 1
     lr = 0.001
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
+    weight_decay = 0.01
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     # warmup scheduler for easy start
     warmup_scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.01, end_factor=1.0, total_iters=warmup_epochs)
     train_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_epochs - warmup_epochs)
@@ -247,23 +253,54 @@ def main():
     train_metrics = metrics.clone(prefix="train_")
     dev_metrics = metrics.clone(prefix="dev_")
 
+    compartments = ["Cytoplasm", "Nucleus", "Extracellular", "Cell membrane", "Mitochondrion", "Plastid", "Endoplasmic reticulum", "Lysosome/Vacuole", "Golgi apparatus", "Peroxisome"]
+
+    # Set up wandb
+    wandb.init()
+    config = wandb.config
+    config.learning_rate = lr
+    config.batch_size = batch_size
+    config.weight_decay = weight_decay
+
     best_mcc = -1
     for i in range(total_epochs):
-        train_loss, train_metrics = train_one_epoch(model, criterion, optimizer, train_loader, train_metrics)
+        train_loss, train_results = train_one_epoch(model, criterion, optimizer, train_loader, train_metrics)
         scheduler.step()
 
-        print_metrics(i, total_epochs, train_loss, train_metrics, dataset="train")
-        dev_loss, dev_metrics = evaluate(model, dev_loader, criterion, dev_metrics)
+        # print_metrics(i, total_epochs, train_loss, train_metrics, dataset="train")
+        dev_loss, dev_results = evaluate(model, dev_loader, criterion, dev_metrics)
 
-        if dev_metrics["dev_mcc_macro"] > best_mcc:
-            print_metrics(i, total_epochs, dev_loss, dev_metrics, dataset="dev")
-            best_mcc = dev_metrics["dev_mcc_macro"]
+        # Wandb log
+        metrics_to_log = {
+            "epoch": i + 1,
+            "train/loss": train_loss,
+            "train/mcc": train_results["train_mcc"],
+            "train/exact_acc": train_results["train_exact_match_acc"],  # Use whatever key your MetricCollection outputs
+
+            "dev/loss": dev_loss,
+            "dev/mcc_macro": dev_results["dev_mcc"],
+            "dev/exact_acc": dev_results["dev_exact_match_acc"],
+            "dev/f1_macro": dev_results["dev_f1_macro"],
+            "dev/jaccard": dev_results["dev_jaccard"]
+        }
+
+        # Per-Class MCCs to the log
+        # This creates a separate section in W&B to see how each structure is performing
+        for name, score in zip(compartments, dev_results["dev_mcc_per_class"]):
+            metrics_to_log[f"val_per_class_mcc/{name}"] = score
+
+        wandb.log(metrics_to_log)
+
+        if dev_results["dev_mcc_macro"] > best_mcc:
+            best_mcc = dev_results["dev_mcc_macro"]
+            print(f"New Best Val MCC: {best_mcc:.4f}")
+
             torch.save({
                 'epoch': i,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
-                'metrics': dev_metrics,
-                'thresholds': dev_metrics['dev_thresholds']
+                'metrics': dev_results,
+                'thresholds': dev_results['dev_thresholds']
             }, "best_model.pt")
 
 
