@@ -1,17 +1,18 @@
-from typing import Dict
-
 import pandas as pd
 import torch
 
 class ProteinLocalizationDataset(torch.utils.data.Dataset):
-    def __init__(self, tokenizer, root="./data/deep_loc_2_0", partition=None, max_length=1024):
+    def __init__(self, tokenizer, partition=None, root="./data/deep_loc_2_0", max_length=1024):
         super().__init__()
         dataset = pd.read_csv(root + "/Swissprot_Train_Validation_dataset.csv", sep=",")
+
+        # Take only certain partition of the data
         if partition is not None:
             dataset = dataset[dataset["Partition"].isin(partition)].reset_index(drop=True)
 
         self.tokenizer = tokenizer
         self.max_length = max_length
+        # All the possible protein locations
         self.LABEL_COLUMNS = ["Cytoplasm", "Nucleus", "Extracellular", "Cell membrane", "Mitochondrion", "Plastid", "Endoplasmic reticulum", "Lysosome/Vacuole", "Golgi apparatus", "Peroxisome"]
         self.labels = dataset[self.LABEL_COLUMNS].values
         self.sequences = dataset["Sequence"].values
