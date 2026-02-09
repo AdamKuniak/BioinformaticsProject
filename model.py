@@ -44,7 +44,7 @@ class ProteinLocalizator(nn.Module):
 
         self.attention_pooling = AttentionPooling(self.embedding_size)
 
-        self.classifier_head = nn.Sequential(
+        self.classifier = nn.Sequential(
             nn.Linear(in_features=self.embedding_size, out_features=self.hidden_size),
             nn.ReLU(inplace=True),
             nn.Dropout(p=self.dropout_prob),
@@ -59,6 +59,6 @@ class ProteinLocalizator(nn.Module):
             embeddings = outputs.last_hidden_state # Shape: [Batch, Seq, 1280]
         # Learnable parts
         pooled_embedding, att_weights = self.attention_pooling(embeddings, attention_mask)
-        logits = self.classifier_head(pooled_embedding)
+        logits = self.classifier(pooled_embedding)
 
         return logits, att_weights
