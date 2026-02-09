@@ -59,6 +59,6 @@ class ProteinLocalizator(nn.Module):
             embeddings = outputs.last_hidden_state # Shape: [Batch, Seq, 1280]
         # Learnable parts
         pooled_embedding, att_weights = self.attention_pooling(embeddings, attention_mask)
-        logits = self.classifier(pooled_embedding)
+        logits = self.classifier(pooled_embedding.squeeze(1))
 
         return logits, att_weights
