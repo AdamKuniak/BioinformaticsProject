@@ -1,7 +1,7 @@
 import pandas as pd
 import torch
 
-class ProteinLocalizationDataset(torch.utils.data.Dataset):
+class SwissProtDataset(torch.utils.data.Dataset):
     def __init__(self, tokenizer, partition=None, root="./data/deep_loc_2_0", max_length=1024):
         super().__init__()
         dataset = pd.read_csv(root + "/Swissprot_Train_Validation_dataset.csv", sep=",")
