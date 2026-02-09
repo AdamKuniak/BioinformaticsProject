@@ -35,3 +35,33 @@ class SwissProtDataset(torch.utils.data.Dataset):
             "attention_mask": tokenized_seq["attention_mask"].squeeze(0),
             "label": label
         }
+
+class HPADataset(torch.utils.data.Dataset):
+    def __init__(self, tokenizer, root="./data/deep_loc_2_0", max_length=1024):
+        super().__init__()
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+        dataset = pd.read_csv(root + "/hpa_testset.csv", sep=",")
+        self.LABEL_COLUMNS = ["Cell membrane", "Cytoplasm", "Endoplasmic reticulum", "Golgi apparatus", "Lysosome/Vacuole", "Mitochondrion", "Nucleus", "Peroxisome"]
+        self.labels = dataset[self.LABEL_COLUMNS].values
+        self.sequences = dataset["fasta"].values
+
+    def __len__(self) -> int:
+        return len(self.sequences)
+
+    def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
+        seq = self.sequences[index]
+        tokenized_seq = self.tokenizer(
+            seq,
+            return_tensors="pt",
+            padding="max_length",
+            truncation=True,
+            max_length=self.max_length
+        )
+        label = torch.tensor(self.labels[index], dtype=torch.float)
+
+        return {
+            "input_ids": tokenized_seq["input_ids"].squeeze(0),
+            "attention_mask": tokenized_seq["attention_mask"].squeeze(0),
+            "label": label
+        }
