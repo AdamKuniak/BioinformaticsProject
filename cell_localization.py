@@ -71,15 +71,16 @@ class ProteinLocalizator(nn.Module):
 
         return logits, att_weights
 
-def train_one_epoch(model: nn.Module, criterion: nn.Module, optimizer: torch.optim, train_loader: DataLoader, train_metrics: MetricCollection):
+def train_one_epoch(model: nn.Module, criterion: nn.Module, optimizer: torch.optim, train_loader: DataLoader, train_metrics: MetricCollection, device: torch.device):
     model.train()
     model.backbone.eval()
     total_loss = 0.0
 
     for batch in train_loader:
-        data = batch["input_ids"]
-        mask = batch["attention_mask"]
-        labels = batch["label"]
+        data = batch["input_ids"].to(device)
+        mask = batch["attention_mask"].to(device)
+        labels = batch["label"].to(device)
+
         # clear gradients
         optimizer.zero_grad()
         # forward pass
@@ -100,7 +101,7 @@ def train_one_epoch(model: nn.Module, criterion: nn.Module, optimizer: torch.opt
 
     return avg_loss, results
 
-def evaluate(model: nn.Module, loader: DataLoader, criterion: nn.Module, metrics: MetricCollection):
+def evaluate(model: nn.Module, loader: DataLoader, criterion: nn.Module, metrics: MetricCollection, device: torch.device):
     model.eval()
     total_loss = 0.0
     all_preds = []
@@ -108,9 +109,9 @@ def evaluate(model: nn.Module, loader: DataLoader, criterion: nn.Module, metrics
 
     with torch.inference_mode():
         for batch in loader:
-            data = batch["input_ids"]
-            mask = batch["attention_mask"]
-            labels = batch["label"]
+            data = batch["input_ids"].to(device)
+            mask = batch["attention_mask"].to(device)
+            labels = batch["label"].to(device)
 
             # forward pass
             logits, _ = model(data, mask)
@@ -121,8 +122,8 @@ def evaluate(model: nn.Module, loader: DataLoader, criterion: nn.Module, metrics
 
             metrics.update(preds, labels)
 
-            all_preds.append(preds)
-            all_labels.append(labels)
+            all_preds.append(preds.cpu())  # store on the cpu to save memory
+            all_labels.append(labels.cpu())
 
         results = metrics.compute()
         avg_loss = total_loss / len(loader)
@@ -177,6 +178,7 @@ def print_final_summary(all_fold_results):
     metrics_to_report = ["dev_mcc_macro", "dev_exact_match_acc", "dev_f1_macro", "dev_jaccard"]
 
     print(f"\n{'#' * 20} FINAL 5-FOLD CROSS-VALIDATION RESULTS {'#' * 20}")
+    # calculate mean and std for every metric
     for m in metrics_to_report:
         values = [res[m] for res in all_fold_results]
         mean = np.mean(values)
@@ -192,7 +194,7 @@ def print_final_summary(all_fold_results):
         class_scores = [res["dev_mcc_per_class"][i] for res in all_fold_results]
         print(f"  {name:25}: {np.mean(class_scores):.4f} +/- {np.std(class_scores):.4f}")
 
-def test_all_splits(tokenizer, metrics, batch_size=64, warmup_epochs=5, total_epochs=25, lr=0.001, weight_decay=0.01):
+def test_all_splits(tokenizer, metrics, device, batch_size=64, warmup_epochs=5, total_epochs=25, lr=0.001, weight_decay=0.01):
     partitions = [0, 1, 2, 3, 4]
     all_fold_results = []
 
@@ -201,6 +203,7 @@ def test_all_splits(tokenizer, metrics, batch_size=64, warmup_epochs=5, total_ep
 
         # Initialize model
         model = ProteinLocalizator()
+        model.to(device)
         # Freeze backbone
         model.backbone.eval()
         for param in model.backbone.parameters():
@@ -218,14 +221,15 @@ def test_all_splits(tokenizer, metrics, batch_size=64, warmup_epochs=5, total_ep
         counts = train_dataset.labels.sum(axis=0)
         total = len(train_dataset)
         inverse_frequencies = total / counts
-        class_weights = torch.tensor(inverse_frequencies, dtype=torch.float)
+        class_weights = torch.tensor(inverse_frequencies, dtype=torch.float).to(device)
         # Normalize
         class_weights = class_weights / class_weights.mean()
+
         # criterion
-        criterion = MultiLabelFocalLoss(alphas=class_weights)
+        criterion = MultiLabelFocalLoss(alphas=class_weights).to(device)
 
         # Wrap them with dataloader
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True).to(device)
         dev_loader = DataLoader(dev_dataset, batch_size=batch_size, shuffle=False)
 
         optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
@@ -234,8 +238,8 @@ def test_all_splits(tokenizer, metrics, batch_size=64, warmup_epochs=5, total_ep
         train_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_epochs - warmup_epochs)
         scheduler = torch.optim.lr_scheduler.SequentialLR(optimizer, schedulers=[warmup_scheduler, train_scheduler], milestones=[warmup_epochs])
 
-        train_metrics = metrics.clone(prefix="train_")
-        dev_metrics = metrics.clone(prefix="dev_")
+        train_metrics = metrics.clone(prefix="train_").to(device)
+        dev_metrics = metrics.clone(prefix="dev_").to(device)
 
         compartments = ["Cytoplasm", "Nucleus", "Extracellular", "Cell membrane", "Mitochondrion", "Plastid", "Endoplasmic reticulum", "Lysosome/Vacuole", "Golgi apparatus", "Peroxisome"]
 
@@ -248,13 +252,15 @@ def test_all_splits(tokenizer, metrics, batch_size=64, warmup_epochs=5, total_ep
 
         best_mcc_this_fold = -1
         best_results_this_fold = None
+
         # training loop
         for i in range(total_epochs):
-            train_loss, train_results = train_one_epoch(model, criterion, optimizer, train_loader, train_metrics)
+            train_loss, train_results = train_one_epoch(model, criterion, optimizer, train_loader, train_metrics, device)
+            print(f"Epoch: {i+1}/{total_epochs}: Train Loss: {train_loss:.4f}, MCC: {train_results['train_mcc']}")
             scheduler.step()
 
             # print_metrics(i, total_epochs, train_loss, train_metrics, dataset="train")
-            dev_loss, dev_results = evaluate(model, dev_loader, criterion, dev_metrics)
+            dev_loss, dev_results = evaluate(model, dev_loader, criterion, dev_metrics, device)
 
             # Wandb log
             metrics_to_log = {
@@ -276,8 +282,8 @@ def test_all_splits(tokenizer, metrics, batch_size=64, warmup_epochs=5, total_ep
 
             wandb.log(metrics_to_log)
 
-            if dev_results["dev_mcc_macro"] > best_mcc_this_fold:
-                best_mcc_this_fold = dev_results["dev_mcc_macro"]
+            if dev_results["dev_mcc"] > best_mcc_this_fold:
+                best_mcc_this_fold = dev_results["dev_mcc"]
                 best_results_this_fold = dev_results
                 print(f"New Best Val MCC: {best_mcc_this_fold:.4f}")
 
@@ -289,12 +295,15 @@ def test_all_splits(tokenizer, metrics, batch_size=64, warmup_epochs=5, total_ep
                     'thresholds': dev_results['dev_thresholds']
                 }, f"best_model_fold_{p}.pt")
 
-            all_fold_results.append(best_results_this_fold)
-            wandb.finish()
+        all_fold_results.append(best_results_this_fold)
+        wandb.finish()
 
-        print_final_summary(all_fold_results)
+    print_final_summary(all_fold_results)
 
 def main():
+    # set device
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     # set a seed for reproducibility
     torch.manual_seed(42)
     tokenizer = AutoTokenizer.from_pretrained("facebook/esm2_t33_650M_UR50D")
@@ -308,7 +317,7 @@ def main():
     })
 
     # Test all splits
-    test_all_splits(tokenizer, metrics)
+    test_all_splits(tokenizer, metrics, device)
 
 
 if __name__ == '__main__':
