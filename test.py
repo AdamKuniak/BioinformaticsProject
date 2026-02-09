@@ -11,14 +11,14 @@ import json
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # 1. Initialize W&B for the final benchmark
+    # Initialize wandb
     wandb.init(project="DeepLoc2-Replication", job_type="final-test", name="HPA-Benchmark")
 
-    # 2. Model Setup
+    # Model Setup
     tokenizer = AutoTokenizer.from_pretrained("facebook/esm2_t33_650M_UR50D")
     model = ProteinLocalizator().to(device)
 
-    # 3. Load Weights
+    # Load Weights
     checkpoint = torch.load("best_model.pt", map_location=device)
     model.attention_pooling.load_state_dict(checkpoint["attention_pooling"])
     model.classifier_head.load_state_dict(checkpoint["classifier"])
@@ -27,12 +27,12 @@ def main():
     best_thresholds = checkpoint["thresholds"].to(device)
     model.eval()
 
-    # 4. Data Setup
+    # Data Setup
     test_dataset = HPADataset(tokenizer)
     test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
     criterion = MultiLabelFocalLoss().to(device)
 
-    # 5. Metric Containers
+    # Metrics
     all_preds = []
     all_labels = []
     total_loss = 0.0
@@ -54,25 +54,24 @@ def main():
             all_preds.append(preds)
             all_labels.append(labels)
 
-    # 6. Final Calculations
     avg_loss = total_loss / len(test_loader)
 
     # Concatenate all batches into two giant tensors
     all_preds = torch.cat(all_preds, dim=0)  # Shape: [1717, 10]
     all_labels = torch.cat(all_labels, dim=0)  # Shape: [1717, 10]
 
-    # 7. Apply the SAVED thresholds (The "DeepLoc Way")
+    # Apply the saved thresholds
     binary_preds = (all_preds >= best_thresholds).long()
 
-    # 8. Calculate Metrics
+    # Calculate Metrics
     # MCC per class
     mcc_per_class = torchmetrics.functional.matthews_corrcoef(binary_preds, all_labels.long(), task="multilabel", num_labels=10)
     mcc_macro = mcc_per_class.mean().item()
     acc = torchmetrics.functional.classification.multilabel_exact_match(binary_preds, all_labels.long(), num_labels=10).item()
     f1_score = torchmetrics.functional.f1_score(binary_preds, all_labels.long(), num_labels=10, task='multilabel').item()
-    jaccard = torchmetrics.functional.jaccard_index(binary_preds, all_labels.long.(), num_labels=10, task='multilabel').item()
+    jaccard = torchmetrics.functional.jaccard_index(binary_preds, all_labels.long(), num_labels=10, task='multilabel').item()
 
-    # 9. Save and Print Results
+    # Save and Print Results
     results = {
         "test_loss": avg_loss,
         "test_mcc_macro": mcc_macro,
@@ -94,7 +93,7 @@ def main():
     with open("hpa_results.json", "w") as f:
         json.dump(results, f, indent=4)
 
-    # Log to W&B
+    # Log to wandb
     wandb.log(results)
     wandb.finish()
 
