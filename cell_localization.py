@@ -194,7 +194,7 @@ def print_final_summary(all_fold_results):
         class_scores = [res["dev_mcc_per_class"][i] for res in all_fold_results]
         print(f"  {name:25}: {np.mean(class_scores):.4f} +/- {np.std(class_scores):.4f}")
 
-def test_all_splits(tokenizer, metrics, device, batch_size=64, warmup_epochs=5, total_epochs=25, lr=0.001, weight_decay=0.01):
+def test_all_splits(tokenizer, metrics, device, batch_size=64, warmup_epochs=1, total_epochs=1, lr=0.001, weight_decay=0.01):
     partitions = [0, 1, 2, 3, 4]
     all_fold_results = []
 
@@ -229,7 +229,7 @@ def test_all_splits(tokenizer, metrics, device, batch_size=64, warmup_epochs=5, 
         criterion = MultiLabelFocalLoss(alphas=class_weights).to(device)
 
         # Wrap them with dataloader
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True).to(device)
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
         dev_loader = DataLoader(dev_dataset, batch_size=batch_size, shuffle=False)
 
         optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
@@ -244,7 +244,7 @@ def test_all_splits(tokenizer, metrics, device, batch_size=64, warmup_epochs=5, 
         compartments = ["Cytoplasm", "Nucleus", "Extracellular", "Cell membrane", "Mitochondrion", "Plastid", "Endoplasmic reticulum", "Lysosome/Vacuole", "Golgi apparatus", "Peroxisome"]
 
         # Set up wandb
-        wandb.init(group="Initial-Benchmark", name=f"fold_{p}", reinit=True)
+        wandb.init(group="Initial-Benchmark", name=f"fold_{p}", job_type="cross-validation", reinit=True)
         config = wandb.config
         config.learning_rate = lr
         config.batch_size = batch_size
@@ -289,8 +289,8 @@ def test_all_splits(tokenizer, metrics, device, batch_size=64, warmup_epochs=5, 
 
                 torch.save({
                     'epoch': i,
-                    'model_state_dict': model.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
+                    'attention_pooling': model.attention_pooling.state_dict(),
+                    'classifier': model.classifier.state_dict(),
                     'metrics': dev_results,
                     'thresholds': dev_results['dev_thresholds']
                 }, f"best_model_fold_{p}.pt")
