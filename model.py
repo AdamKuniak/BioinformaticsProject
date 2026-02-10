@@ -3,9 +3,13 @@ import torch
 import torch.nn as nn
 
 class AttentionPooling(nn.Module):
-    def __init__(self, hidden_size):
+    """
+    Class implementing the attention pooling, which takes the protein embedding as input and produces a pooled representation of the protein using attention mechanism
+    hidden_size: size of the embedding dimension
+    """
+    def __init__(self, embedding_size):
         super().__init__()
-        self.learnable_vector = nn.Parameter(torch.empty(1, hidden_size))
+        self.learnable_vector = nn.Parameter(torch.empty(1, embedding_size))
         self.learnable_vector = nn.init.xavier_uniform_(self.learnable_vector)
 
         # 1D Gaussian filter
@@ -34,21 +38,24 @@ class AttentionPooling(nn.Module):
 
 
 class ProteinLocalizator(nn.Module):
+    """
+    Class implementing the whole model for protein cell localization. The ESM-2 based backbone, the attention pooling layer and the classification head.
+    """
     def __init__(self, model_name="facebook/esm2_t33_650M_UR50D", num_labels=10):
         super().__init__()
         # Pretrained backbone, ESM-2 model
         self.backbone = EsmModel.from_pretrained(model_name)
-        self.embedding_size = self.backbone.config.hidden_size
-        self.hidden_size = 128
+        self.embedding_size = self.backbone.config.embedding_size
+        self.hidden_layer_size = 128
         self.dropout_prob = 0.1
 
         self.attention_pooling = AttentionPooling(self.embedding_size)
 
         self.classifier = nn.Sequential(
-            nn.Linear(in_features=self.embedding_size, out_features=self.hidden_size),
+            nn.Linear(in_features=self.embedding_size, out_features=self.hidden_layer_size),
             nn.ReLU(inplace=True),
             nn.Dropout(p=self.dropout_prob),
-            nn.Linear(in_features=self.hidden_size, out_features=num_labels)
+            nn.Linear(in_features=self.hidden_layer_size, out_features=num_labels)
         )
 
     def forward(self, x: torch.Tensor, attention_mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -56,7 +63,7 @@ class ProteinLocalizator(nn.Module):
         with torch.no_grad():
             outputs = self.backbone(input_ids=x, attention_mask=attention_mask)
 
-            embeddings = outputs.last_hidden_state # Shape: [Batch, Seq, 1280]
+            embeddings = outputs.last_hidden_state  # Shape: [Batch, Seq, 1280]
         # Learnable parts
         pooled_embedding, att_weights = self.attention_pooling(embeddings, attention_mask)
         logits = self.classifier(pooled_embedding.squeeze(1))
