@@ -2,6 +2,11 @@ import pandas as pd
 import torch
 
 class SwissProtDataset(torch.utils.data.Dataset):
+    """
+    Class representing a Train/Validation SwissProt dataset
+    tokenizer: Tokenizer object to tokenize protein sequences
+    partition: list of integers representing the partition for cross validation
+    """
     def __init__(self, tokenizer, partition=None, root="./data/deep_loc_2_0", max_length=1024):
         super().__init__()
         dataset = pd.read_csv(root + "/Swissprot_Train_Validation_dataset.csv", sep=",")
@@ -37,6 +42,10 @@ class SwissProtDataset(torch.utils.data.Dataset):
         }
 
 class HPADataset(torch.utils.data.Dataset):
+    """
+        Class representing a test HPA dataset
+        tokenizer: Tokenizer object to tokenize protein sequences
+        """
     def __init__(self, tokenizer, root="./data/deep_loc_2_0", max_length=1024):
         super().__init__()
         self.tokenizer = tokenizer
