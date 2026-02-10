@@ -3,6 +3,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class MultiLabelFocalLoss(nn.Module):
+    """
+    Class implementing weighted multi-label focal loss
+    alphas: list of weights for each class
+    gamma: the focal factor
+    """
     def __init__(self, alphas=None, gamma=1.0):
         super().__init__()
         self.gamma = gamma
