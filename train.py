@@ -184,7 +184,7 @@ def test_all_splits(tokenizer, metrics, device, batch_size=64, warmup_epochs=1, 
         compartments = ["Cytoplasm", "Nucleus", "Extracellular", "Cell membrane", "Mitochondrion", "Plastid", "Endoplasmic reticulum", "Lysosome/Vacuole", "Golgi apparatus", "Peroxisome"]
 
         # Set up wandb
-        wandb.init(group="Initial-Benchmark", name=f"fold_{p}", job_type="cross-validation", reinit=True)
+        wandb.init(group="Initial-Benchmark", name=f"fold_{p}", job_type="cross-validation", reinit=True, mode="offline")
         config = wandb.config
         config.learning_rate = lr
         config.batch_size = batch_size
