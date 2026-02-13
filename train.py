@@ -128,7 +128,7 @@ def print_final_summary(all_fold_results):
     # Per-Class Summary
     compartments = ["Cytoplasm", "Nucleus", "Extracellular", "Cell membrane", "Mitochondrion", "Plastid", "Endoplasmic reticulum", "Lysosome/Vacuole", "Golgi apparatus", "Peroxisome"]
 
-    print("\nPer-Class MCC (Mean +/- Std):")
+    print("\nPer-Class MCC (mean +/- std):")
     # all_fold_results[fold]["dev_mcc_per_class"] is a list of 10
     for i, name in enumerate(compartments):
         class_scores = [res["dev_mcc_per_class"][i] for res in all_fold_results]
@@ -139,7 +139,7 @@ def test_all_splits(tokenizer, metrics, device, batch_size=64, warmup_epochs=1, 
     all_fold_results = []
 
     for p in partitions:
-        print(f"\n{'='*20} STARTING FOLD {p} {'='*20}")
+        print(f"\n{'='*20} Starting fold {p} {'='*20}")
 
         # Initialize model
         model = ProteinLocalizator()
