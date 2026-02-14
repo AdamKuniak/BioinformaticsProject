@@ -60,7 +60,7 @@ def evaluate(model: nn.Module, loader: DataLoader, criterion: nn.Module, metrics
 
             preds = torch.sigmoid(logits)
 
-            metrics.update(preds, labels)
+            metrics.update(preds, labels.long())
 
             all_preds.append(preds.cpu())  # store on the cpu to save memory
             all_labels.append(labels.cpu())
