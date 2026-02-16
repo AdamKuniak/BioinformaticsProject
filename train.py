@@ -9,7 +9,8 @@ from data_utils import PrecomputedSwissDataset
 from focal_loss import MultiLabelFocalLoss
 from model import ProteinLocalizatorHead
 import numpy as np
-import os, datetime
+import os
+import datetime
 
 
 def train_one_epoch(model: nn.Module, criterion: nn.Module, optimizer: torch.optim, train_loader: DataLoader, train_metrics: MetricCollection, device: torch.device):
@@ -159,6 +160,10 @@ def test_all_splits(metrics, device, batch_size=256, warmup_epochs=5, total_epoc
     parent_run_dir = f"wandb_runs/cross_validation_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
     os.makedirs(parent_run_dir, exist_ok=True)
 
+    # Parent directory for models
+    model_dir = "model_25_epo"
+    os.makedirs(model_dir, exist_ok=True)
+
     for p in partitions:
         print(f"\n{'='*20} Starting fold {p} {'='*20}")
 
@@ -259,7 +264,8 @@ def test_all_splits(metrics, device, batch_size=256, warmup_epochs=5, total_epoc
                     'classifier': model.classifier.state_dict(),
                     'metrics': dev_results,
                     'thresholds': dev_results['dev_thresholds']
-                }, f"best_model_fold_{p}.pt")
+                }, os.pathjoin(model_dir, f"best_model_fold_{p}.pt")
+                )
 
         all_fold_results.append(best_results_this_fold)
         wandb.finish()
