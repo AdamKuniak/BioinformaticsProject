@@ -264,7 +264,7 @@ def test_all_splits(metrics, device, batch_size=256, warmup_epochs=5, total_epoc
                     'classifier': model.classifier.state_dict(),
                     'metrics': dev_results,
                     'thresholds': dev_results['dev_thresholds']
-                }, os.pathjoin(model_dir, f"best_model_fold_{p}.pt")
+                }, os.path.join(model_dir, f"best_model_fold_{p}.pt")
                 )
 
         all_fold_results.append(best_results_this_fold)
