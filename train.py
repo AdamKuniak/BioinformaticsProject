@@ -133,6 +133,8 @@ def print_final_summary(all_fold_results):
     # calculate mean and std for every metric
     for m in metrics_to_report:
         values = [res[m] for res in all_fold_results]
+        # Convert tensors to numpy if needed
+        values = [v.cpu().numpy() if isinstance(v, torch.Tensor) else v for v in values]
         mean = np.mean(values)
         std = np.std(values)
         print(f"{m}: {mean:.4f} +/- {std:.4f}")
@@ -144,6 +146,8 @@ def print_final_summary(all_fold_results):
     # all_fold_results[fold]["dev_mcc_per_class"] is a list of 10
     for i, name in enumerate(compartments):
         class_scores = [res["dev_mcc_per_class"][i] for res in all_fold_results]
+        # Convert tensors to numpy if needed
+        class_scores = [s.cpu().numpy() if isinstance(s, torch.Tensor) else s for s in class_scores]
         print(f"  {name:25}: {np.mean(class_scores):.4f} +/- {np.std(class_scores):.4f}")
 
 def test_all_splits(metrics, device, batch_size=256, warmup_epochs=5, total_epochs=25, lr=0.00005, weight_decay=0.01):
