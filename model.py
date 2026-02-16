@@ -37,40 +37,6 @@ class AttentionPooling(nn.Module):
         return final_representation, attention_weights
 
 
-class ProteinLocalizator(nn.Module):
-    """
-    Class implementing the whole model for protein cell localization. The ESM-2 based backbone, the attention pooling layer and the classification head.
-    """
-    def __init__(self, model_name="facebook/esm2_t33_650M_UR50D", num_labels=10):
-        super().__init__()
-        # Pretrained backbone, ESM-2 model
-        self.backbone = EsmModel.from_pretrained(model_name)
-        self.embedding_size = self.backbone.config.embedding_size
-        self.hidden_layer_size = 128
-        self.dropout_prob = 0.1
-
-        self.attention_pooling = AttentionPooling(self.embedding_size)
-
-        self.classifier = nn.Sequential(
-            nn.Linear(in_features=self.embedding_size, out_features=self.hidden_layer_size),
-            nn.ReLU(inplace=True),
-            nn.Dropout(p=self.dropout_prob),
-            nn.Linear(in_features=self.hidden_layer_size, out_features=num_labels)
-        )
-
-    def forward(self, x: torch.Tensor, attention_mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        # Frozen backbone
-        with torch.no_grad():
-            outputs = self.backbone(input_ids=x, attention_mask=attention_mask)
-
-            embeddings = outputs.last_hidden_state  # Shape: [Batch, Seq, 1280]
-        # Learnable parts
-        pooled_embedding, att_weights = self.attention_pooling(embeddings, attention_mask)
-        logits = self.classifier(pooled_embedding.squeeze(1))
-
-        return logits, att_weights
-
-
 class ProteinLocalizatorHead(nn.Module):
     """
     Lightweight head, just attention pooling & classifier that operates on precomputed ESM-2 embeddings.
@@ -94,3 +60,29 @@ class ProteinLocalizatorHead(nn.Module):
         pooled_embedding, att_weights = self.attention_pooling(embeddings, attention_mask)
         logits = self.classifier(pooled_embedding.squeeze(1))
         return logits, att_weights
+
+
+class ProteinLocalizator(nn.Module):
+    """
+    Full model with ESM-2 backbone + classification head.
+    """
+    def __init__(self, model_name="facebook/esm2_t33_650M_UR50D", num_labels=10):
+        super().__init__()
+        # Pretrained backbone, ESM-2 model
+        self.backbone = EsmModel.from_pretrained(model_name)
+
+        self.head = ProteinLocalizatorHead(
+            embedding_size=self.backbone.config.hidden_size,
+            num_labels=num_labels
+        )
+
+    def forward(self, x: torch.Tensor, attention_mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        # Frozen backbone
+        with torch.no_grad():
+            outputs = self.backbone(input_ids=x, attention_mask=attention_mask)
+            embeddings = outputs.last_hidden_state  # Shape: [Batch, Seq, 1280]
+
+        # Head
+        logits = self.head(embeddings, attention_mask)
+
+        return logits
