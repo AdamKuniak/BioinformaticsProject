@@ -9,6 +9,7 @@ from data_utils import PrecomputedSwissDataset
 from focal_loss import MultiLabelFocalLoss
 from model import ProteinLocalizatorHead
 import numpy as np
+import os, datetime
 
 
 def train_one_epoch(model: nn.Module, criterion: nn.Module, optimizer: torch.optim, train_loader: DataLoader, train_metrics: MetricCollection, device: torch.device):
@@ -154,6 +155,10 @@ def test_all_splits(metrics, device, batch_size=256, warmup_epochs=5, total_epoc
     partitions = [0, 1, 2, 3, 4]
     all_fold_results = []
 
+    # Create a parent directory for all fold runs
+    parent_run_dir = f"wandb_runs/cross_validation_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    os.makedirs(parent_run_dir, exist_ok=True)
+
     for p in partitions:
         print(f"\n{'='*20} Starting fold {p} {'='*20}")
 
@@ -198,6 +203,7 @@ def test_all_splits(metrics, device, batch_size=256, warmup_epochs=5, total_epoc
         # Set up wandb
         wandb.init(
             project="protein-localization-cv",
+            dir=parent_run_dir,
             group="Initial-Benchmark",
             name=f"fold_{p}",
             job_type="cross-validation",
