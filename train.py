@@ -1,30 +1,30 @@
 from torch.utils.data import DataLoader
-from transformers import AutoTokenizer
 import torch
 import torch.nn as nn
 import wandb
 import torchmetrics
 from torchmetrics import MetricCollection, MatthewsCorrCoef, JaccardIndex, F1Score
 from torchmetrics.classification import MultilabelExactMatch
-from data_utils import SwissProtDataset
+from data_utils import PrecomputedSwissDataset
 from focal_loss import MultiLabelFocalLoss
-from model import ProteinLocalizator
+from model import ProteinLocalizatorHead
 import numpy as np
+
 
 def train_one_epoch(model: nn.Module, criterion: nn.Module, optimizer: torch.optim, train_loader: DataLoader, train_metrics: MetricCollection, device: torch.device):
     model.train()
-    model.backbone.eval()
     total_loss = 0.0
+    num_batches = len(train_loader)
 
-    for batch in train_loader:
-        data = batch["input_ids"].to(device)
+    for batch_idx, batch in enumerate(train_loader):
+        embedding = batch["embedding"].to(device, dtype=torch.float32)
         mask = batch["attention_mask"].to(device)
         labels = batch["label"].to(device)
 
         # clear gradients
         optimizer.zero_grad()
         # forward pass
-        logits, _ = model(data, mask)
+        logits, _ = model(embedding, mask)
         # Loss
         loss = criterion(logits, labels)
         # backward pas
@@ -34,6 +34,10 @@ def train_one_epoch(model: nn.Module, criterion: nn.Module, optimizer: torch.opt
         preds = torch.sigmoid(logits).squeeze(1)
         train_metrics.update(preds, labels.long())
         total_loss += loss.item()
+
+        if (batch_idx + 1) % 10 == 0 or (batch_idx + 1) == num_batches:
+            print(f"\r  Train batch {batch_idx + 1}/{num_batches} | loss: {loss.item():.4f}", end="", flush=True)
+            print()
 
     results = train_metrics.compute()
     avg_loss = total_loss / len(train_loader)
@@ -47,14 +51,15 @@ def evaluate(model: nn.Module, loader: DataLoader, criterion: nn.Module, metrics
     all_preds = []
     all_labels = []
 
+    num_batches = len(loader)
     with torch.inference_mode():
-        for batch in loader:
-            data = batch["input_ids"].to(device)
+        for batch_idx, batch in enumerate(loader):
+            embedding = batch["embedding"].to(device, dtype=torch.float32)
             mask = batch["attention_mask"].to(device)
             labels = batch["label"].to(device)
 
             # forward pass
-            logits, _ = model(data, mask)
+            logits, _ = model(embedding, mask)
             loss = criterion(logits, labels)
             total_loss += loss.item()
 
@@ -65,6 +70,10 @@ def evaluate(model: nn.Module, loader: DataLoader, criterion: nn.Module, metrics
             all_preds.append(preds.cpu())  # store on the cpu to save memory
             all_labels.append(labels.cpu())
 
+            if (batch_idx + 1) % 10 == 0 or (batch_idx + 1) == num_batches:
+                print(f"\r  Eval batch {batch_idx + 1}/{num_batches} | loss: {loss.item():.4f}", end="", flush=True)
+                print()
+
         results = metrics.compute()
         avg_loss = total_loss / len(loader)
         metrics.reset()
@@ -74,10 +83,13 @@ def evaluate(model: nn.Module, loader: DataLoader, criterion: nn.Module, metrics
         opt_thresholds = find_optimal_thresholds(all_preds, all_labels)
 
         binary_preds = (all_preds >= opt_thresholds).long()
-        mcc_per_class = torchmetrics.functional.matthews_corrcoef(binary_preds, all_labels.long(), task="multilabel", num_labels=10)
+        mcc_per_class = [
+            torchmetrics.functional.matthews_corrcoef(binary_preds[:, c], all_labels[:, c].long(), task="binary").item()
+            for c in range(all_labels.shape[1])
+        ]
 
-        results["dev_mcc_macro"] = mcc_per_class.mean().item()  # Overwrite with the better score
-        results["dev_mcc_per_class"] = mcc_per_class.tolist()  # MCC per class
+        results["dev_mcc_macro"] = np.mean(mcc_per_class)  # Overwrite with the better score
+        results["dev_mcc_per_class"] = mcc_per_class  # MCC per class
         results["dev_thresholds"] = opt_thresholds
 
     return avg_loss, results
@@ -134,28 +146,24 @@ def print_final_summary(all_fold_results):
         class_scores = [res["dev_mcc_per_class"][i] for res in all_fold_results]
         print(f"  {name:25}: {np.mean(class_scores):.4f} +/- {np.std(class_scores):.4f}")
 
-def test_all_splits(tokenizer, metrics, device, batch_size=64, warmup_epochs=1, total_epochs=1, lr=0.001, weight_decay=0.01):
+def test_all_splits(metrics, device, batch_size=256, warmup_epochs=5, total_epochs=25, lr=0.00005, weight_decay=0.01):
     partitions = [0, 1, 2, 3, 4]
     all_fold_results = []
 
     for p in partitions:
         print(f"\n{'='*20} Starting fold {p} {'='*20}")
 
-        # Initialize model
-        model = ProteinLocalizator()
+        # Initialize model (lightweight head only, no backbone on GPU)
+        model = ProteinLocalizatorHead()
         model.to(device)
-        # Freeze backbone
-        model.backbone.eval()
-        for param in model.backbone.parameters():
-            param.requires_grad = False
 
         # 2. Correct Partition Slicing
         train_folds = [f for f in partitions if f != p]
         dev_folds = [p]
 
-        # Create datasets
-        train_dataset = SwissProtDataset(tokenizer, train_folds)
-        dev_dataset = SwissProtDataset(tokenizer, dev_folds)
+        # Create datasets from precomputed embeddings
+        train_dataset = PrecomputedSwissDataset(train_folds)
+        dev_dataset = PrecomputedSwissDataset(dev_folds)
 
         # Get the class weights by extracting inverse frequencies
         counts = train_dataset.labels.sum(axis=0)
@@ -169,8 +177,8 @@ def test_all_splits(tokenizer, metrics, device, batch_size=64, warmup_epochs=1, 
         criterion = MultiLabelFocalLoss(alphas=class_weights).to(device)
 
         # Wrap them with dataloader
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        dev_loader = DataLoader(dev_dataset, batch_size=batch_size, shuffle=False)
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True, persistent_workers=True)
+        dev_loader = DataLoader(dev_dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True, persistent_workers=True)
 
         optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
         # warmup scheduler for easy start
@@ -240,13 +248,13 @@ def test_all_splits(tokenizer, metrics, device, batch_size=64, warmup_epochs=1, 
 
     print_final_summary(all_fold_results)
 
+
 def main():
     # set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # set a seed for reproducibility
     torch.manual_seed(42)
-    tokenizer = AutoTokenizer.from_pretrained("facebook/esm2_t33_650M_UR50D")
 
     # Metrics to calculate; accuracy and mcc is per label
     metrics = MetricCollection({
@@ -256,8 +264,8 @@ def main():
         "f1_macro": F1Score(task="multilabel", num_labels=10, average="macro")
     })
 
-    # Test all splits
-    test_all_splits(tokenizer, metrics, device)
+    # Test all splits (run precompute.py first!)
+    test_all_splits(metrics, device)
 
 
 if __name__ == '__main__':
