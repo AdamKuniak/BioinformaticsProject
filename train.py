@@ -128,29 +128,44 @@ def find_optimal_thresholds(all_preds: torch.Tensor, all_labels: torch.Tensor, n
     return optimal_thresholds
 
 
-def print_final_summary(all_fold_results):
+def print_final_summary(all_fold_results, output_file="final_summary.txt"):
     metrics_to_report = ["dev_mcc_macro", "dev_exact_match_acc", "dev_f1_macro", "dev_jaccard"]
 
-    print(f"\n{'#' * 20} FINAL 5-FOLD CROSS-VALIDATION RESULTS {'#' * 20}")
-    # calculate mean and std for every metric
-    for m in metrics_to_report:
-        values = [res[m] for res in all_fold_results]
-        # Convert tensors to numpy if needed
-        values = [v.cpu().numpy() if isinstance(v, torch.Tensor) else v for v in values]
-        mean = np.mean(values)
-        std = np.std(values)
-        print(f"{m}: {mean:.4f} +/- {std:.4f}")
+    # Open file for writing
+    with open(output_file, 'w') as f:
+        header = f"\n{'#' * 20} FINAL 5-FOLD CROSS-VALIDATION RESULTS {'#' * 20}\n"
+        print(header)
+        f.write(header + "\n")
 
-    # Per-Class Summary
-    compartments = ["Cytoplasm", "Nucleus", "Extracellular", "Cell membrane", "Mitochondrion", "Plastid", "Endoplasmic reticulum", "Lysosome/Vacuole", "Golgi apparatus", "Peroxisome"]
+        # calculate mean and std for every metric
+        for m in metrics_to_report:
+            values = [res[m] for res in all_fold_results]
+            # Convert tensors to numpy if needed
+            values = [v.cpu().numpy() if isinstance(v, torch.Tensor) else v for v in values]
+            mean = np.mean(values)
+            std = np.std(values)
+            line = f"{m}: {mean:.4f} +/- {std:.4f}"
+            print(line)
+            f.write(line + "\n")
 
-    print("\nPer-Class MCC (mean +/- std):")
-    # all_fold_results[fold]["dev_mcc_per_class"] is a list of 10
-    for i, name in enumerate(compartments):
-        class_scores = [res["dev_mcc_per_class"][i] for res in all_fold_results]
-        # Convert tensors to numpy if needed
-        class_scores = [s.cpu().numpy() if isinstance(s, torch.Tensor) else s for s in class_scores]
-        print(f"  {name:25}: {np.mean(class_scores):.4f} +/- {np.std(class_scores):.4f}")
+        # Per-Class Summary
+        compartments = ["Cytoplasm", "Nucleus", "Extracellular", "Cell membrane", "Mitochondrion",
+                        "Plastid", "Endoplasmic reticulum", "Lysosome/Vacuole", "Golgi apparatus", "Peroxisome"]
+
+        per_class_header = "\nPer-Class MCC (mean +/- std):"
+        print(per_class_header)
+        f.write("\n" + per_class_header + "\n")
+
+        # all_fold_results[fold]["dev_mcc_per_class"] is a list of 10
+        for i, name in enumerate(compartments):
+            class_scores = [res["dev_mcc_per_class"][i] for res in all_fold_results]
+            # Convert tensors to numpy if needed
+            class_scores = [s.cpu().numpy() if isinstance(s, torch.Tensor) else s for s in class_scores]
+            line = f"  {name:25}: {np.mean(class_scores):.4f} +/- {np.std(class_scores):.4f}"
+            print(line)
+            f.write(line + "\n")
+
+    print(f"\nSummary saved to {output_file}")
 
 def test_all_splits(metrics, device, batch_size=256, warmup_epochs=5, total_epochs=25, lr=0.00005, weight_decay=0.01):
     partitions = [0, 1, 2, 3, 4]
@@ -191,8 +206,8 @@ def test_all_splits(metrics, device, batch_size=256, warmup_epochs=5, total_epoc
         criterion = MultiLabelFocalLoss(alphas=class_weights).to(device)
 
         # Wrap them with dataloader
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True, persistent_workers=True)
-        dev_loader = DataLoader(dev_dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True, persistent_workers=True)
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
+        dev_loader = DataLoader(dev_dataset, batch_size=batch_size, shuffle=False, num_workers=4)
 
         optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
         # warmup scheduler for easy start
