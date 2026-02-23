@@ -4,7 +4,7 @@ import json
 
 class MCSADataset(torch.utils.data.Dataset):
     def __init__(self, tokenizer, root="./data/test/test_dataset.json", max_length=1024):
-        super.__init__()
+        super().__init__()
         self.tokenizer = tokenizer
         self.max_length = max_length
 
@@ -37,7 +37,7 @@ class MCSADataset(torch.utils.data.Dataset):
 
 class UniprotDataset(torch.utils.data.Dataset):
     def __init__(self, tokenizer, root="./data/train_val/train_val_dataset.json", fold=None, max_length=1024):
-        super.__init__()
+        super().__init__()
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.data = json.load(open(root, "r"))
