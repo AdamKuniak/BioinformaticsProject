@@ -3,11 +3,14 @@ import torch
 import torch.nn as nn
 
 class ActiveSitePredictor(torch.nn.Module):
-    def __init__(self, neck, model_name="facebook/esm2_t33_650M_UR50D"):
+    def __init__(self, neck, model_name="facebook/esm2_t33_650M_UR50D", head_hidden_dim=256):
         super().__init__()
         self.backbone = EsmModel.from_pretrained(model_name)
         self.neck = neck
-        self.classification_head = ClassificationHead(embedding_size=self.backbone.config.hidden_size)
+        self.classification_head = ClassificationHead(
+            embedding_size=self.neck.output_dim,
+            hidden_dim=head_hidden_dim
+        )
 
     def forward(self, x: torch.Tensor, mask: torch.Tensor):
         # Frozen backbone
@@ -38,3 +41,15 @@ class ClassificationHead(torch.nn.Module):
 
     def forward(self, x):
         return self.classifier(x).squeze(-1)
+
+
+class IdentityNeck(torch.nn.Module):
+    """
+    Identity neck, just passes backbone embeddings to the classification head without modification.
+    """
+    def __init__(self, output_dim: int):
+        super().__init__()
+        self.output_dim = output_dim
+
+    def forward(self, x, mask=None):
+        return x
