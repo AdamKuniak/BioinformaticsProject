@@ -7,7 +7,7 @@ from data_utils import HPADataset
 from torch.utils.data import DataLoader
 import os
 
-def precompute(batch_size=8, train=True, output_dir="./data/swissprot_precomputed_embeddings", pretrained_model="facebook/esm2_t33_650M_UR50D", max_length=1024):
+def precompute(batch_size=8, train=True, pretrained_model="facebook/esm2_t33_650M_UR50D", max_length=1024):
     """
     Precompute ESM-2 embeddings for the SwissProt dataset and save them to memory-mapped files for efficient loading during training.
     """
@@ -24,11 +24,13 @@ def precompute(batch_size=8, train=True, output_dir="./data/swissprot_precompute
 
     # Load dataset depending on whether we're precomputing for training or testing (SwissProt vs HPA)
     if train:
+        output_dir = "./data/train/swissprot_precomputed_embeddings"
         dataset = SwissProtDataset(tokenizer, partition=None, max_length=max_length)
         input_file = "./data/Swissprot_Train_Validation_dataset.csv"
     else:
+        output_dir = "./data/test/swissprot_precomputed_embeddings"
         dataset = HPADataset(tokenizer, max_length=max_length)
-        input_file = "./data/HPA_test_dataset.csv"
+        input_file = "./data/hpa_testset.csv"
 
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, pin_memory=True)
     total = len(dataset)
