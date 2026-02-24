@@ -46,6 +46,7 @@ def precompute_embeddings(mode="train", batch_size=16, pretrained_model="faceboo
         df = pd.read_json(input_file)
         metadata = {
             "fold": torch.tensor(df["fold"].values),
+            "labels": torch.tensor(np.array([rec["label"] for rec in dataset.data]), dtype=torch.float),
             "length": total,
             "max_length": max_length,
             "hidden_dim": hidden_dim
