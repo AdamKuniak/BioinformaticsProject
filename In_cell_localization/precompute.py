@@ -3,10 +3,11 @@ from transformers import AutoTokenizer, EsmModel
 import numpy as np
 import pandas as pd
 from data_utils import SwissProtDataset
+from data_utils import HPADataset
 from torch.utils.data import DataLoader
 import os
 
-def precompute(batch_size=8, output_dir="./data/precomputed_embeddings", pretrained_model="facebook/esm2_t33_650M_UR50D", max_length=1024):
+def precompute(batch_size=8, train=True, output_dir="./data/swissprot_precomputed_embeddings", pretrained_model="facebook/esm2_t33_650M_UR50D", max_length=1024):
     """
     Precompute ESM-2 embeddings for the SwissProt dataset and save them to memory-mapped files for efficient loading during training.
     """
@@ -20,25 +21,42 @@ def precompute(batch_size=8, output_dir="./data/precomputed_embeddings", pretrai
 
     hidden_dim = backbone.config.hidden_size  # 1280 for esm2_t33_650M_UR50D
 
-    # Load SwissProt dataset
-    dataset = SwissProtDataset(tokenizer, partition=None, max_length=max_length)
+    # Load dataset depending on whether we're precomputing for training or testing (SwissProt vs HPA)
+    if train:
+        dataset = SwissProtDataset(tokenizer, partition=None, max_length=max_length)
+        input_file = "./data/Swissprot_Train_Validation_dataset.csv"
+    else:
+        dataset = HPADataset(tokenizer, max_length=max_length)
+        input_file = "./data/HPA_test_dataset.csv"
+
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, pin_memory=True)
     total = len(dataset)
 
     os.makedirs(output_dir, exist_ok=True)
 
     # Save metadata (partitions + labels) for PrecomputedDataset to filter by fold
-    df = pd.read_csv("./data/Swissprot_Train_Validation_dataset.csv", sep=",")
-    label_columns = ["Cytoplasm", "Nucleus", "Extracellular", "Cell membrane", "Mitochondrion",
-                     "Plastid", "Endoplasmic reticulum", "Lysosome/Vacuole", "Golgi apparatus", "Peroxisome"]
-    torch.save({
-            "partitions": df["Partition"].values,
-            "labels": df[label_columns].values,
-            "length": total,
-            "max_length": max_length,
-            "hidden_dim": hidden_dim
-        }, os.path.join(output_dir, "metadata.pt")
-    )
+    df = pd.read_csv(input_file, sep=",")
+
+    if train:
+        label_columns = ["Cytoplasm", "Nucleus", "Extracellular", "Cell membrane", "Mitochondrion",
+                         "Plastid", "Endoplasmic reticulum", "Lysosome/Vacuole", "Golgi apparatus", "Peroxisome"]
+        torch.save({
+                "partitions": df["Partition"].values,
+                "labels": df[label_columns].values,
+                "length": total,
+                "max_length": max_length,
+                "hidden_dim": hidden_dim
+            }, os.path.join(output_dir, "metadata.pt")
+        )
+    else:
+        label_columns = ["Cell membrane", "Cytoplasm", "Endoplasmic reticulum", "Golgi apparatus", "Lysosome/Vacuole", "Mitochondrion", "Nucleus", "Peroxisome"]
+        torch.save({
+                "labels": df[label_columns].values,
+                "length": total,
+                "max_length": max_length,
+                "hidden_dim": hidden_dim
+            }, os.path.join(output_dir, "metadata.pt")
+        )
 
     # Memmap files for embeddings and attention masks
     emb_mmap = np.memmap(
