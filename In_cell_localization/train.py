@@ -19,14 +19,14 @@ def train_one_epoch(model: nn.Module, criterion: nn.Module, optimizer: torch.opt
     num_batches = len(train_loader)
 
     for batch_idx, batch in enumerate(train_loader):
-        embedding = batch["embedding"].to(device, dtype=torch.float32)
+        embeddings = batch["embedding"].to(device, dtype=torch.float32)
         mask = batch["attention_mask"].to(device)
         labels = batch["label"].to(device)
 
         # clear gradients
         optimizer.zero_grad()
         # forward pass
-        logits, _ = model(embedding, mask)
+        logits, _ = model(embeddings, mask)
         # Loss
         loss = criterion(logits, labels)
         # backward pas
@@ -38,7 +38,7 @@ def train_one_epoch(model: nn.Module, criterion: nn.Module, optimizer: torch.opt
         total_loss += loss.item()
 
         if (batch_idx + 1) % 10 == 0 or (batch_idx + 1) == num_batches:
-            print(f"\r  Train batch {batch_idx + 1}/{num_batches} | loss: {loss.item():.4f}", end="", flush=True)
+            print(f"\r  Train batch {batch_idx+1}/{num_batches} | loss: {loss.item():.4f}", end="", flush=True)
             print()
 
     results = train_metrics.compute()
@@ -56,12 +56,12 @@ def evaluate(model: nn.Module, loader: DataLoader, criterion: nn.Module, metrics
     num_batches = len(loader)
     with torch.inference_mode():
         for batch_idx, batch in enumerate(loader):
-            embedding = batch["embedding"].to(device, dtype=torch.float32)
+            embeddings = batch["embedding"].to(device, dtype=torch.float32)
             mask = batch["attention_mask"].to(device)
             labels = batch["label"].to(device)
 
             # forward pass
-            logits, _ = model(embedding, mask)
+            logits, _ = model(embeddings, mask)
             loss = criterion(logits, labels)
             total_loss += loss.item()
 
@@ -73,7 +73,7 @@ def evaluate(model: nn.Module, loader: DataLoader, criterion: nn.Module, metrics
             all_labels.append(labels.cpu())
 
             if (batch_idx + 1) % 10 == 0 or (batch_idx + 1) == num_batches:
-                print(f"\r  Eval batch {batch_idx + 1}/{num_batches} | loss: {loss.item():.4f}", end="", flush=True)
+                print(f"\r  Eval batch {batch_idx+1}/{num_batches} | loss: {loss.item():.4f}", end="", flush=True)
                 print()
 
         results = metrics.compute()
