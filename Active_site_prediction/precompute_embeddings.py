@@ -64,7 +64,7 @@ def precompute_embeddings(mode="train", batch_size=16, pretrained_model="faceboo
             "total": total,
             "max_length": max_length,
             "hidden_dim": hidden_dim,
-            "labels": torch.tensor(dataset.labels, dtype=torch.float)
+            "labels": torch.stack([pad_label(rec["label"]) for rec in dataset.data])
         }
 
     torch.save(metadata, os.path.join(output_dir, "metadata.pt"))
