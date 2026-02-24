@@ -15,6 +15,7 @@ def precompute(batch_size=8, train=True, output_dir="./data/swissprot_precompute
     print(f"Using device: {device}")
 
     # Load the backbone
+    print("Loading ESM-2 backbone...")
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model)
     backbone = EsmModel.from_pretrained(pretrained_model).to(device)
     backbone.eval()
@@ -41,8 +42,8 @@ def precompute(batch_size=8, train=True, output_dir="./data/swissprot_precompute
         label_columns = ["Cytoplasm", "Nucleus", "Extracellular", "Cell membrane", "Mitochondrion",
                          "Plastid", "Endoplasmic reticulum", "Lysosome/Vacuole", "Golgi apparatus", "Peroxisome"]
         torch.save({
-                "partitions": df["Partition"].values,
-                "labels": df[label_columns].values,
+                "partitions": torch.tensor(df["Partition"].values),
+                "labels": torch.tensor(df[label_columns].values, dtype=torch.float),
                 "length": total,
                 "max_length": max_length,
                 "hidden_dim": hidden_dim
@@ -51,7 +52,7 @@ def precompute(batch_size=8, train=True, output_dir="./data/swissprot_precompute
     else:
         label_columns = ["Cell membrane", "Cytoplasm", "Endoplasmic reticulum", "Golgi apparatus", "Lysosome/Vacuole", "Mitochondrion", "Nucleus", "Peroxisome"]
         torch.save({
-                "labels": df[label_columns].values,
+                "labels": torch.tensor(df[label_columns].values, dtype=torch.float),
                 "length": total,
                 "max_length": max_length,
                 "hidden_dim": hidden_dim
@@ -91,6 +92,7 @@ def precompute(batch_size=8, train=True, output_dir="./data/swissprot_precompute
     emb_mmap.flush()
     mask_mmap.flush()
     print(f"Done! Saved {idx} embeddings to {output_dir}")
+
 
 if __name__ == "__main__":
     precompute()
