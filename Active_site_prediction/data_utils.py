@@ -3,6 +3,9 @@ import json
 
 
 class MCSADataset(torch.utils.data.Dataset):
+    """
+    Dataset for the M-CSA test set, which contains sequences and binary labels indicating whether each residue is part of an active site.
+    """
     def __init__(self, tokenizer, root="./data/test/test_dataset.json", max_length=1024):
         super().__init__()
         self.tokenizer = tokenizer
@@ -36,6 +39,9 @@ class MCSADataset(torch.utils.data.Dataset):
 
 
 class UniprotDataset(torch.utils.data.Dataset):
+    """
+    Uniprot train/validation dataset, which contains sequences and binary labels indicating whether each residue is part of an active site.
+    """
     def __init__(self, tokenizer, root="./data/train_val/train_val_dataset.json", fold=None, max_length=1024):
         super().__init__()
         self.tokenizer = tokenizer
