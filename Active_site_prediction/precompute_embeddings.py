@@ -80,11 +80,19 @@ def precompute_embeddings(mode="train", batch_size=16, pretrained_model="faceboo
 
             outputs = backbone(input_ids=input_ids, attention_mask=attention_mask)
 
-            embeddings = outputs.last_hidden_state[:, 1:-1, :]
+            embeddings = outputs.last_hidden_state[:, 1:-1, :]  # [bs, seq_len-2, hidden]
             attention_mask = attention_mask[:, 1:-1]
 
+            # Truncate to max_length
             embeddings = embeddings[:, :max_length, :]
             attention_mask = attention_mask[:, :max_length]
+
+            # Pad back to max_length if shorter
+            seq_len = embeddings.size(1)
+            if seq_len < max_length:
+                pad = max_length - seq_len
+                embeddings = torch.nn.functional.pad(embeddings, (0, 0, 0, pad))  # pad seq dim
+                attention_mask = torch.nn.functional.pad(attention_mask, (0, pad))
 
             bs = embeddings.size(0)
             emb_mmap[idx:idx + bs] = embeddings.half().cpu().numpy()
