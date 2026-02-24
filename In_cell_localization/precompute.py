@@ -10,7 +10,7 @@ def precompute(batch_size=8, output_dir="./data/precomputed_embeddings", pretrai
     """
     Precompute ESM-2 embeddings for the SwissProt dataset and save them to memory-mapped files for efficient loading during training.
     """
-    device = torch.deivce("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
     # Load the backbone
