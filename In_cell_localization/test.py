@@ -1,102 +1,127 @@
 import torch
-from data_utils import HPADataset
-from model import ProteinLocalizator
-from transformers import AutoTokenizer
+from data_utils import PrecomputedHPADataset
+from model import ProteinLocalizatorHead
 from torch.utils.data import DataLoader
 import torchmetrics
-import wandb
-from focal_loss import MultiLabelFocalLoss
-import json
+import numpy as np
+
+COMPARTMENTS = ["Cell membrane", "Cytoplasm", "Endoplasmic reticulum", "Golgi apparatus",
+                "Lysosome/Vacuole", "Mitochondrion", "Nucleus", "Peroxisome"]
+
+MODEL_DIR = "results/run_1024_120epo_dp_02/models"
+NUM_FOLDS = 5
+
+
+def evaluate_fold(model, dataloader, device, best_thresholds, hpa_indices):
+    all_preds = []
+    all_labels = []
+
+    with torch.inference_mode():
+        for batch in dataloader:
+            embeddings = batch["embedding"].to(device, dtype=torch.float32)
+            mask = batch["attention_mask"].to(device)
+            labels = batch["label"].to(device)
+
+            logits, _ = model(embeddings, mask)
+            preds = torch.sigmoid(logits)
+
+            all_preds.append(preds)
+            all_labels.append(labels)
+
+    all_preds = torch.cat(all_preds, dim=0)
+    all_preds = all_preds[:, hpa_indices]
+    all_labels = torch.cat(all_labels, dim=0)
+
+    binary_preds = (all_preds >= best_thresholds).long()
+
+    mcc_per_class = [
+        torchmetrics.functional.matthews_corrcoef(
+            binary_preds[:, c], all_labels[:, c].long(), task="binary"
+        ).item()
+        for c in range(8)
+    ]
+    mcc_macro = np.mean(mcc_per_class)
+    acc = torchmetrics.functional.classification.multilabel_exact_match(
+        binary_preds, all_labels.long(), num_labels=8
+    ).item()
+    f1 = torchmetrics.functional.f1_score(
+        binary_preds, all_labels.long(), num_labels=8, task="multilabel"
+    ).item()
+    jaccard = torchmetrics.functional.jaccard_index(
+        binary_preds, all_labels.long(), num_labels=8, task="multilabel"
+    ).item()
+
+    return {
+        "mcc_macro": mcc_macro,
+        "mcc_per_class": mcc_per_class,
+        "exact_match_acc": acc,
+        "f1_macro": f1,
+        "jaccard": jaccard,
+    }
+
+
+def save_summary(all_fold_results, output_file="test_summary.txt"):
+    metrics_to_report = ["mcc_macro", "exact_match_acc", "f1_macro", "jaccard"]
+
+    with open(output_file, "w") as f:
+        header = f"\n{'#' * 20} HPA TEST RESULTS ACROSS 5 FOLDS {'#' * 20}\n"
+        print(header)
+        f.write(header + "\n")
+
+        for m in metrics_to_report:
+            values = [res[m] for res in all_fold_results]
+            mean = np.mean(values)
+            std = np.std(values)
+            line = f"{m}: {mean:.4f} +/- {std:.4f}"
+            print(line)
+            f.write(line + "\n")
+
+        per_class_header = "\nPer-Class MCC (mean +/- std):"
+        print(per_class_header)
+        f.write("\n" + per_class_header + "\n")
+
+        for i, name in enumerate(COMPARTMENTS):
+            class_scores = [res["mcc_per_class"][i] for res in all_fold_results]
+            line = f"  {name:25}: {np.mean(class_scores):.4f} +/- {np.std(class_scores):.4f}"
+            print(line)
+            f.write(line + "\n")
+
+    print(f"\nSummary saved to {output_file}")
+
 
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Initialize wandb
-    wandb.init(project="DeepLoc2-Replication", job_type="final-test", name="HPA-Benchmark")
+    SWISS_COLUMNS = ["Cytoplasm", "Nucleus", "Extracellular", "Cell membrane", "Mitochondrion", "Plastid", "Endoplasmic reticulum", "Lysosome/Vacuole", "Golgi apparatus", "Peroxisome"]
 
-    # Model Setup
-    tokenizer = AutoTokenizer.from_pretrained("facebook/esm2_t33_650M_UR50D")
-    model = ProteinLocalizator().to(device)
+    HPA_COLUMNS = ["Cell membrane", "Cytoplasm", "Endoplasmic reticulum", "Golgi apparatus", "Lysosome/Vacuole", "Mitochondrion", "Nucleus", "Peroxisome"]
 
-    # Load Weights
-    checkpoint = torch.load("best_model.pt", map_location=device)
-    model.attention_pooling.load_state_dict(checkpoint["attention_pooling"])
-    model.classifier_head.load_state_dict(checkpoint["classifier"])
+    # Get the indices in SwissProt order that correspond to each HPA label
+    hpa_indices = [SWISS_COLUMNS.index(col) for col in HPA_COLUMNS]
 
-    # Move thresholds to device for comparison
-    best_thresholds = checkpoint["thresholds"].to(device)
-    model.eval()
+    test_dataset = PrecomputedHPADataset()
+    test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False, num_workers=4)
 
-    # Data Setup
-    test_dataset = HPADataset(tokenizer)
-    test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
-    criterion = MultiLabelFocalLoss().to(device)
+    all_fold_results = []
 
-    # Metrics
-    all_preds = []
-    all_labels = []
-    total_loss = 0.0
+    for fold in range(NUM_FOLDS):
+        print(f"\nEvaluating fold {fold}...")
+        model = ProteinLocalizatorHead().to(device)
 
-    print("Running inference on HPA dataset")
-    with torch.inference_mode():
-        for batch in test_loader:
-            data = batch["input_ids"].to(device)
-            mask = batch["attention_mask"].to(device)
-            labels = batch["label"].to(device)
+        checkpoint = torch.load(f"{MODEL_DIR}/best_model_fold_{fold}.pt", map_location=device, weights_only=False)
+        model.attention_pooling.load_state_dict(checkpoint["attention_pooling"])
+        model.classifier.load_state_dict(checkpoint["classifier"])
+        best_thresholds = checkpoint["thresholds"].to(device)
+        best_thresholds = best_thresholds[hpa_indices]
+        model.eval()
 
-            logits, _ = model(data, mask)
-            loss = criterion(logits, labels)
-            total_loss += loss.item()
+        results = evaluate_fold(model, test_loader, device, best_thresholds, hpa_indices)
+        all_fold_results.append(results)
 
-            preds = torch.sigmoid(logits)
+        print(f"  Fold {fold} MCC: {results['mcc_macro']:.4f}")
 
-            # Accumulate EVERYTHING for the final calculation
-            all_preds.append(preds)
-            all_labels.append(labels)
-
-    avg_loss = total_loss / len(test_loader)
-
-    # Concatenate all batches into two giant tensors
-    all_preds = torch.cat(all_preds, dim=0)  # Shape: [1717, 10]
-    all_labels = torch.cat(all_labels, dim=0)  # Shape: [1717, 10]
-
-    # Apply the saved thresholds
-    binary_preds = (all_preds >= best_thresholds).long()
-
-    # Calculate Metrics
-    # MCC per class
-    mcc_per_class = torchmetrics.functional.matthews_corrcoef(binary_preds, all_labels.long(), task="multilabel", num_labels=10)
-    mcc_macro = mcc_per_class.mean().item()
-    acc = torchmetrics.functional.classification.multilabel_exact_match(binary_preds, all_labels.long(), num_labels=10).item()
-    f1_score = torchmetrics.functional.f1_score(binary_preds, all_labels.long(), num_labels=10, task='multilabel').item()
-    jaccard = torchmetrics.functional.jaccard_index(binary_preds, all_labels.long(), num_labels=10, task='multilabel').item()
-
-    # Save and Print Results
-    results = {
-        "test_loss": avg_loss,
-        "test_mcc_macro": mcc_macro,
-        "test_acc": acc,
-        "test_mcc_per_class": mcc_per_class.tolist(),
-        "f1_score": f1_score,
-        "jaccard": jaccard
-    }
-
-    # Print to terminal
-    print(f"\n{'=' * 30}\nFINAL HPA RESULTS\n{'=' * 30}")
-    print(f"Loss: {avg_loss:.4f}")
-    print(f"Macro MCC: {mcc_macro:.4f}")
-    print(f"Accuracy: {acc:.4f}")
-    print(f"F1_score: {f1_score:.4f}")
-    print(f"Jaccard: {jaccard:.4f}")
-
-    # Save to JSON for your records/paper
-    with open("hpa_results.json", "w") as f:
-        json.dump(results, f, indent=4)
-
-    # Log to wandb
-    wandb.log(results)
-    wandb.finish()
+    save_summary(all_fold_results)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
