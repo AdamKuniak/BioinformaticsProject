@@ -28,7 +28,7 @@ def precompute(batch_size=8, train=True, pretrained_model="facebook/esm2_t33_650
         dataset = SwissProtDataset(tokenizer, partition=None, max_length=max_length)
         input_file = "./data/Swissprot_Train_Validation_dataset.csv"
     else:
-        output_dir = "./data/test/swissprot_precomputed_embeddings"
+        output_dir = "./data/test/hpa_precomputed_embeddings"
         dataset = HPADataset(tokenizer, max_length=max_length)
         input_file = "./data/hpa_testset.csv"
 
