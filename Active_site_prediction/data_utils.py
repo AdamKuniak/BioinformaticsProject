@@ -33,6 +33,12 @@ class MCSADataset(torch.utils.data.Dataset):
             max_length=self.max_length
         )
 
+        # Pad or truncate label to max_length
+        label = label[:self.max_length]
+        pad_length = self.max_length - label.size(0)
+        if pad_length > 0:
+            label = torch.nn.functional.pad(label, (0, pad_length), value=0)
+
         return {
             "input_ids": tokenized_seq["input_ids"].squeeze(0),
             "attention_mask": tokenized_seq["attention_mask"].squeeze(0),
