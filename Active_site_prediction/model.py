@@ -2,7 +2,7 @@ from transformers import EsmModel
 import torch
 import torch.nn as nn
 
-class ActiveSitePredictor(torch.nn.Module):
+class ActiveSitePredictor(nn.Module):
     """
     Main model class for active site prediction, which consists of a frozen ESM-2 backbone, a neck, and a classification head that produces binary predictions for each residue.
     """
@@ -29,7 +29,7 @@ class ActiveSitePredictor(torch.nn.Module):
         return self.classification_head(neck_output)
 
 
-class ClassificationHead(torch.nn.Module):
+class ClassificationHead(nn.Module):
     """
     Simple classification head that produces a binary prediction for each residue.
     """
@@ -46,7 +46,7 @@ class ClassificationHead(torch.nn.Module):
         return self.classifier(x).squeze(-1)
 
 
-class IdentityNeck(torch.nn.Module):
+class IdentityNeck(nn.Module):
     """
     Identity neck, just passes backbone embeddings to the classification head without modification.
     """
@@ -56,3 +56,30 @@ class IdentityNeck(torch.nn.Module):
 
     def forward(self, x, mask=None):
         return x
+
+
+class AttentionNeck(nn.Module):
+    """
+    Attention neck that applies self-attention to the backbone embeddings.
+    """
+    def __init__(self, hidden_dim: int, n_layers: int = 1, n_head: int = 8, dropout: float = 0.1):
+        super().__init__()
+
+        # Transformer encoder layer
+        self.encoder_layer = nn.TransformerEncoderLayer(
+            d_model=hidden_dim,  # matches ESM-2 embedding size
+            nhead=n_head,
+            dim_feedforward=512,  # dimension of the FFN in the transformer layer
+            dropout=dropout,
+            batch_first=True
+        )
+
+        # the transformer itself
+        self.transformer = nn.TransformerEncoder(
+            self.encoder_layer,
+            num_layers=n_layers
+        )
+
+    def forward(self, x, mask=None):
+        return self.transformer(x, src_key_padding_mask=mask)
+
