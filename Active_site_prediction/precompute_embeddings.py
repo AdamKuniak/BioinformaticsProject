@@ -41,12 +41,20 @@ def precompute_embeddings(mode="train", batch_size=16, pretrained_model="faceboo
 
     os.makedirs(output_dir, exist_ok=True)
 
+    def pad_label(label):
+        t = torch.tensor(label, dtype=torch.float)
+        t = t[:max_length]
+        pad_length = max_length - t.size(0)
+        if pad_length > 0:
+            t = torch.nn.functional.pad(t, (0, pad_length), value=0)
+        return t
+
     # Build and save metadata
     if mode == "train":
         df = pd.read_json(input_file)
         metadata = {
             "fold": torch.tensor(df["fold"].values),
-            "labels": torch.tensor(np.array([rec["label"] for rec in dataset.data]), dtype=torch.float),
+            "labels": torch.stack([pad_label(rec["label"]) for rec in dataset.data]),
             "length": total,
             "max_length": max_length,
             "hidden_dim": hidden_dim
