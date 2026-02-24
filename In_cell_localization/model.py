@@ -37,31 +37,6 @@ class AttentionPooling(nn.Module):
         return final_representation, attention_weights
 
 
-class ProteinLocalizatorHead(nn.Module):
-    """
-    Lightweight head, just attention pooling & classifier that operates on precomputed ESM-2 embeddings.
-    No backbone on GPU — use with PrecomputedDataset for fast training.
-    """
-    def __init__(self, embedding_size=1280, num_labels=10):
-        super().__init__()
-        self.hidden_layer_size = 128
-        self.dropout_prob = 0.1
-
-        self.attention_pooling = AttentionPooling(embedding_size)
-
-        self.classifier = nn.Sequential(
-            nn.Linear(in_features=embedding_size, out_features=self.hidden_layer_size),
-            nn.ReLU(inplace=True),
-            nn.Dropout(p=self.dropout_prob),
-            nn.Linear(in_features=self.hidden_layer_size, out_features=num_labels)
-        )
-
-    def forward(self, embeddings: torch.Tensor, attention_mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        pooled_embedding, att_weights = self.attention_pooling(embeddings, attention_mask)
-        logits = self.classifier(pooled_embedding.squeeze(1))
-        return logits, att_weights
-
-
 class ProteinLocalizator(nn.Module):
     """
     Full model with ESM-2 backbone + classification head.
@@ -86,3 +61,28 @@ class ProteinLocalizator(nn.Module):
         logits = self.head(embeddings, attention_mask)
 
         return logits
+
+
+class ProteinLocalizatorHead(nn.Module):
+    """
+    Lightweight head, just attention pooling & classifier that operates on precomputed ESM-2 embeddings.
+    No backbone on GPU — use with PrecomputedDataset for fast training.
+    """
+    def __init__(self, embedding_size=1280, num_labels=10):
+        super().__init__()
+        self.hidden_layer_size = 128
+        self.dropout_prob = 0.1
+
+        self.attention_pooling = AttentionPooling(embedding_size)
+
+        self.classifier = nn.Sequential(
+            nn.Linear(in_features=embedding_size, out_features=self.hidden_layer_size),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=self.dropout_prob),
+            nn.Linear(in_features=self.hidden_layer_size, out_features=num_labels)
+        )
+
+    def forward(self, embeddings: torch.Tensor, attention_mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        pooled_embedding, att_weights = self.attention_pooling(embeddings, attention_mask)
+        logits = self.classifier(pooled_embedding.squeeze(1))
+        return logits, att_weights
