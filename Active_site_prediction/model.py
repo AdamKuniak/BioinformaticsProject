@@ -3,6 +3,9 @@ import torch
 import torch.nn as nn
 
 class ActiveSitePredictor(torch.nn.Module):
+    """
+    Main model class for active site prediction, which consists of a frozen ESM-2 backbone, a neck, and a classification head that produces binary predictions for each residue.
+    """
     def __init__(self, neck, model_name="facebook/esm2_t33_650M_UR50D", head_hidden_dim=256):
         super().__init__()
         self.backbone = EsmModel.from_pretrained(model_name)
