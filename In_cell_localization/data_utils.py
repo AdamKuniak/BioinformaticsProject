@@ -140,7 +140,7 @@ class PrecomputedHPADataset(torch.utils.data.Dataset):
     def __init__(self, root="./data/test/hpa_precomputed_embeddings"):
         super().__init__()
         metadata = torch.load(os.path.join(root, "metadata.pt"), weights_only=False)
-        self._total = metadata["total"]
+        self._total = metadata["length"]
         self._max_length = metadata["max_length"]
         self._hidden_dim = metadata["hidden_dim"]
         self._root = root
