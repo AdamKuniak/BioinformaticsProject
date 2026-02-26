@@ -31,7 +31,8 @@ def train_one_epoch(model: nn.Module, criterion: nn.Module, optimizer: torch.opt
         # forward pass
         logits = model(embeddings, mask)
         # Loss
-        loss = criterion(logits, labels, mask == 0)
+        torch_mask = (mask == 0)  # Torch has a different convention for masking than Hugging Face
+        loss = criterion(logits, labels, torch_mask)
         # backward pas
         loss.backward()
         optimizer.step()
@@ -39,7 +40,7 @@ def train_one_epoch(model: nn.Module, criterion: nn.Module, optimizer: torch.opt
         # Accumulate for epoch-level metrics
         all_logits.append(logits.detach().cpu())
         all_labels.append(labels.cpu())
-        all_masks.append((mask == 0).cpu())
+        all_masks.append((torch_mask == 0).cpu())
 
         if (batch_idx + 1) % 10 == 0 or (batch_idx + 1) == num_batches:
             print(f"\r  Train batch {batch_idx+1}/{num_batches} | loss: {loss.item():.4f}", end="", flush=True)
@@ -103,3 +104,48 @@ def find_optimal_threshold(all_logits: torch.Tensor, all_labels: torch.Tensor, p
             best_thresh = thresh.item()
 
     return best_thresh, best_mcc
+
+
+def evaluate(model, loader, criterion, device):
+    model.eval()
+    total_loss = 0.0
+    num_batches = len(loader)
+
+    all_logits = []
+    all_labels = []
+    all_masks = []
+
+    with torch.inference_mode():
+        for batch_idx, batch in enumerate(loader):
+            embeddings = batch["embedding"].to(device, dtype=torch.float32)
+            mask = batch["attention_mask"].to(device)
+            labels = batch["label"].to(device, dtype=torch.float32)
+
+            torch_mask = (mask == 0)  # Torch has a different convention for masking than Hugging Face
+            logits = model(embeddings, mask)
+            loss = criterion(logits, labels, torch_mask)
+            total_loss += loss.item()
+
+            # Accumulate on CPU
+            all_logits.append(logits.cpu())
+            all_labels.append(labels.cpu())
+            all_masks.append(torch_mask.cpu())
+
+            if (batch_idx + 1) % 10 == 0 or (batch_idx + 1) == num_batches:
+                print(f"\r  Eval batch {batch_idx+1}/{num_batches} | loss: {loss.item():.4f}", end="", flush=True)
+
+    # [n_proteins, seq_len]
+    all_logits = torch.cat(all_logits, dim=0)
+    all_labels = torch.cat(all_labels, dim=0)
+    all_masks = torch.cat(all_masks,  dim=0)
+
+    # Find the best threshold on this validation set
+    best_threshold, best_mcc = find_optimal_threshold(all_logits, all_labels, all_masks)
+
+    # Compute full metrics at the best threshold
+    results = compute_metrics(all_logits, all_labels, padding_mask=all_masks, threshold=best_threshold)
+
+    results["threshold"] = best_threshold
+    avg_loss = total_loss / num_batches
+
+    return avg_loss, results
