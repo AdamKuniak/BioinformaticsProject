@@ -15,18 +15,19 @@ class WeightedFocalLoss(nn.Module):
         self.gamma = gamma
 
     def forward(self, logits: torch.Tensor, targets: torch.Tensor, mask: torch.Tensor = None) -> torch.Tensor:
+        assert logits.shape == targets.shape, f"logits shape {logits.shape} must match targets shape {targets.shape}"
+        if mask is not None:
+            assert mask.shape == logits.shape, f"padding_mask shape {mask.shape} must match logits shape {logits.shape}"
+
         # bce[i] = -[y * log(sigmoid(x)) + (1-y) * log(1 - sigmoid(x))]
         # reduction = "none" means we keep the loss for each element in the batch and sequence, because I multiply each position's loss by different focal weight
         bce_loss = F.binary_cross_entropy_with_logits(logits.squeeze(2), targets, reduction="none")  # [batch, seq_len]
 
         # get the probabilities
         probs = torch.sigmoid(logits)
-
         pt = probs * targets + (1 - probs) * (1 - targets)
-
         # If target == 1 alpha_t = alpha, if target == 0 alpha_t = 1 - alpha
         alpha_t = self.alpha * targets + (1 - self.alpha) * (1 - targets)
-
         # focal weights
         focal_weights = alpha_t * (1 - pt) ** self.gamma
         loss = focal_weights * bce_loss
