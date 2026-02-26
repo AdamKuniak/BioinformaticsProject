@@ -35,6 +35,9 @@ def train_one_epoch(model: nn.Module, criterion: nn.Module, optimizer: torch.opt
         loss = criterion(logits, labels, torch_mask)
         # backward pas
         loss.backward()
+
+        # Gradient clipping — important for transformer neck stability
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
 
         # Accumulate for epoch-level metrics
@@ -185,12 +188,15 @@ def build_neck(neck_type: str, hidden_dim: int = 1280) -> nn.Module:
     """
         Neck factory to build the neck module based on the specified type.
     """
+    valid = ["identity", "attention"]
+    if neck_type not in valid:
+        raise ValueError(f"Unknown neck type: '{neck_type}'. "
+                         f"Valid options: {valid}")
+
     if neck_type == "identity":
         return IdentityNeck(output_dim=hidden_dim)
     elif neck_type == "attention":
         return AttentionNeck(hidden_dim=hidden_dim, n_layers=1, n_head=8, dropout=0.1)
-    else:
-        raise ValueError(f"Unknown neck type: {neck_type}. ", f"Choose from: identity, attention")
 
 
 def train_all_folds(device, neck_type: str = "identity", batch_size=32, warmup_epochs=3, total_epochs=20, lr=1e-3, weight_decay=0.01):
@@ -301,6 +307,7 @@ def train_all_folds(device, neck_type: str = "identity", batch_size=32, warmup_e
         wandb.finish()
 
     print_final_summary(all_fold_results, output_file=os.path.join(parent_run_dir, f"final_summary_{neck_type}.txt"))
+
 
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
