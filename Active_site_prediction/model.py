@@ -22,8 +22,11 @@ class ActiveSitePredictor(nn.Module):
             embeddings = outputs.last_hidden_state
             # embeddings = outputs.last_hidden_state[:, 1:-1, :]  # strip <cls> and <eos>
 
+        # padding mask for the necks
+        padding_mask = (mask == 0)
+
         # Neck
-        neck_output = self.neck(embeddings, mask)
+        neck_output = self.neck(embeddings, padding_mask)
 
         # Classification head
         return self.classification_head(neck_output)
