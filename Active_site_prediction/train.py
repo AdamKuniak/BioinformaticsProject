@@ -149,3 +149,33 @@ def evaluate(model, loader, criterion, device):
     avg_loss = total_loss / num_batches
 
     return avg_loss, results
+
+
+def print_final_summary(all_fold_results, output_file="final_summary.txt"):
+    metrics_to_report = ["mcc", "f1", "precision", "recall", "auprc"]
+
+    with open(output_file, 'w') as f:
+        header = f"\n{'#' * 20} FINAL 5-FOLD CROSS-VALIDATION RESULTS {'#' * 20}\n"
+        print(header)
+        f.write(header + "\n")
+
+        for m in metrics_to_report:
+            values = [res[m] for res in all_fold_results]
+            values = [v.cpu().numpy() if isinstance(v, torch.Tensor) else v for v in values]
+            mean = np.mean(values)
+            std = np.std(values)
+            line = f"  {m:12}: {mean:.4f} +/- {std:.4f}"
+            print(line)
+            f.write(line + "\n")
+
+        # Report best threshold per fold
+        thresh_header = "\nOptimal thresholds per fold:"
+        print(thresh_header)
+        f.write(thresh_header + "\n")
+
+        for fold_idx, res in enumerate(all_fold_results):
+            line = f"  Fold {fold_idx}: threshold={res['threshold']:.3f}"
+            print(line)
+            f.write(line + "\n")
+
+    print(f"\nSummary saved to {output_file}")
