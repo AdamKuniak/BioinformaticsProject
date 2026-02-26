@@ -139,3 +139,7 @@ class PrecomputedUniprotDataset(torch.utils.data.Dataset):
             "attention_mask": torch.from_numpy(self._masks[real_idx].copy()).long(),
             "label": self.labels[idx].float(),
         }
+
+    @property
+    def masks(self):
+        return self._masks
