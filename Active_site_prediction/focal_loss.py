@@ -2,15 +2,16 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+
 class WeightedFocalLoss(nn.Module):
     """
     Class implementing weighted focal loss for binary classification
     alpha : weight for the positive class (active site)
     gamma : focusing parameter — higher = more focus on hard examples
     """
-    def __init__(self, alphas, gamma: float=2):
+    def __init__(self, alpha, gamma: float = 2.0):
         super().__init__()
-        self.register_buffer("alphas", alphas)
+        self.register_buffer("alpha", alpha)
         self.gamma = gamma
 
     def forward(self, logits: torch.Tensor, targets: torch.Tensor, mask: torch.Tensor = None) -> torch.Tensor:
@@ -24,7 +25,7 @@ class WeightedFocalLoss(nn.Module):
         pt = probs * targets + (1 - probs) * (1 - targets)
 
         # If target == 1 alpha_t = alpha, if target == 0 alpha_t = 1 - alpha
-        alpha_t = self.alphas * targets + (1 - self.alphas) * (1 - targets)
+        alpha_t = self.alpha * targets + (1 - self.alpha) * (1 - targets)
 
         # focal weights
         focal_weights = alpha_t * (1 - pt) ** self.gamma
