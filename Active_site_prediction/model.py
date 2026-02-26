@@ -46,7 +46,7 @@ class ClassificationHead(nn.Module):
         )
 
     def forward(self, x):
-        return self.classifier(x).squeze(-1)
+        return self.classifier(x).squeeze(-1)
 
 
 class IdentityNeck(nn.Module):
@@ -67,10 +67,11 @@ class AttentionNeck(nn.Module):
     """
     def __init__(self, hidden_dim: int, n_layers: int = 1, n_head: int = 8, dropout: float = 0.1):
         super().__init__()
+        self.output_dim = hidden_dim
 
         # Transformer encoder layer
         self.encoder_layer = nn.TransformerEncoderLayer(
-            d_model=hidden_dim,  # matches ESM-2 embedding size
+            d_model=self.output_dim,  # matches ESM-2 embedding size
             nhead=n_head,
             dim_feedforward=512,  # dimension of the FFN in the transformer layer
             dropout=dropout,
