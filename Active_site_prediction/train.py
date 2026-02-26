@@ -300,5 +300,17 @@ def train_all_folds(device, neck_type: str = "identity", batch_size=32, warmup_e
         all_fold_results.append(best_results_this_fold)
         wandb.finish()
 
-    print_final_summary(all_fold_results, output_file=os.path.join(parent_run_dir, f"final_summary_{neck_type}.txt")
+    print_final_summary(all_fold_results, output_file=os.path.join(parent_run_dir, f"final_summary_{neck_type}.txt"))
 
+def main():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    torch.manual_seed(42)
+    np.random.seed(42)  # for numpy reproducibility too
+
+    print(f"Using device: {device}")
+
+    train_all_folds(device, neck_type="identity")
+
+
+if __name__ == "__main__":
+    main()
