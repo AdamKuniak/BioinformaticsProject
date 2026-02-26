@@ -1,11 +1,9 @@
 from torch.utils.data import DataLoader
 import torch
 import torch.nn as nn
-import wandb
-import torchmetrics
 from torchmetrics import MetricCollection
 from torchmetrics.functional.classification import binary_matthews_corrcoef, binary_f1_score, binary_precision, binary_recall, binary_average_precision
-
+import wandb
 from data_utils import PrecomputedUniprotDataset
 from focal_loss import WeightedFocalLoss
 from model import ActiveSitePredictor
@@ -76,3 +74,32 @@ def compute_metrics(logits: torch.Tensor, targets: torch.Tensor, padding_mask: t
         "recall":    binary_recall(preds, targets).item(),
         "auprc":     binary_average_precision(probs, targets).item(),
     }
+
+
+def find_optimal_threshold(all_logits: torch.Tensor, all_labels: torch.Tensor, padding_mask: torch.Tensor = None, num_thresholds: int = 100) -> tuple[float, float]:
+    probs = torch.sigmoid(all_logits)
+    targets = all_labels.long()
+
+    # Flatten and remove padding before searching
+    if padding_mask is not None:
+        valid = ~padding_mask
+        probs = probs[valid]
+        targets = targets[valid]
+
+    thresholds = torch.linspace(0.01, 0.99, num_thresholds)
+    best_mcc = -1.0
+    best_thresh = 0.5
+
+    for thresh in thresholds:
+        preds = (probs >= thresh).long()
+
+        # Skip degenerate cases where MCC is undefined
+        if preds.sum() == 0 or (1 - preds).sum() == 0:
+            continue
+
+        mcc = binary_matthews_corrcoef(preds, targets).item()
+        if mcc > best_mcc:
+            best_mcc = mcc
+            best_thresh = thresh.item()
+
+    return best_thresh, best_mcc
