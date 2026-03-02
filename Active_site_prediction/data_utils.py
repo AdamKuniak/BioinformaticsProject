@@ -142,4 +142,8 @@ class PrecomputedUniprotDataset(torch.utils.data.Dataset):
 
     @property
     def masks(self):
-        return self._masks
+        if self._masks is None:
+            self.open_memmaps()
+
+        # only the masks for the proteins in this specific fold
+        return self._masks[self.indices]
