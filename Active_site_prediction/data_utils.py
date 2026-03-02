@@ -104,7 +104,6 @@ class PrecomputedUniprotDataset(torch.utils.data.Dataset):
         self._root = root
 
         all_folds = metadata["fold"]  # list of ints
-        all_labels = metadata["labels"]  # tensor of shape (total, max_length)
 
         if fold is not None:
             mask = np.isin(all_folds, fold)
@@ -112,7 +111,9 @@ class PrecomputedUniprotDataset(torch.utils.data.Dataset):
         else:
             self.indices = np.arange(self._total)
 
-        self.labels = all_labels[self.indices]
+        self.labels = metadata["labels"][self.indices].clone()
+
+        del metadata  # free up memory
 
         self._embeddings = None
         self._masks = None
