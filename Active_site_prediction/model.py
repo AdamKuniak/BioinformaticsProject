@@ -37,6 +37,31 @@ class ActiveSitePredictor(nn.Module):
         return self.classification_head(neck_output)
 
 
+class ActiveSitePredictorHead(nn.Module):
+    """
+    Lightweight version of ActiveSitePredictor that operates on precomputed ESM-2 embeddings.
+    This class does NOT contain the backbone. Use this for fast training.
+    """
+
+    def __init__(self, neck, head_hidden_dim=256):
+        super().__init__()
+        assert hasattr(neck, "output_dim"), "Neck must have an output_dim attribute."
+
+        self.neck = neck
+        self.classification_head = ClassificationHead(
+            embedding_size=self.neck.output_dim,
+            hidden_dim=head_hidden_dim
+        )
+
+    def forward(self, embeddings: torch.Tensor, mask: torch.Tensor):
+        assert embeddings.dim() == 3, f"Expected [batch, seq_len, hidden_dim], got {embeddings.shape}"
+
+        padding_mask = (mask == 0)
+        neck_output = self.neck(embeddings, padding_mask)
+
+        return self.classification_head(neck_output)  # shape [batch, seq_len]
+
+
 class ClassificationHead(nn.Module):
     """
     Simple classification head that produces a binary prediction for each residue.
