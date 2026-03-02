@@ -184,7 +184,7 @@ def print_final_summary(all_fold_results, output_file="final_summary.txt"):
     print(f"\nSummary saved to {output_file}")
 
 
-def build_neck(neck_type: str, hidden_dim: int = 1280) -> nn.Module:
+def build_neck(neck_type: str, hidden_dim: int = 1280, dropout: float = None) -> nn.Module:
     """
         Neck factory to build the neck module based on the specified type.
     """
@@ -196,10 +196,10 @@ def build_neck(neck_type: str, hidden_dim: int = 1280) -> nn.Module:
     if neck_type == "identity":
         return IdentityNeck(output_dim=hidden_dim)
     elif neck_type == "attention":
-        return AttentionNeck(hidden_dim=hidden_dim, n_layers=1, n_head=8, dropout=0.1)
+        return AttentionNeck(hidden_dim=hidden_dim, n_layers=1, n_head=8, dropout=dropout)
 
 
-def train_all_folds(device, neck_type: str = "identity", batch_size=32, warmup_epochs=3, total_epochs=20, lr=1e-3, weight_decay=0.01):
+def train_all_folds(device, neck_type: str = "identity", batch_size=32, warmup_epochs=5, total_epochs=80, lr=1e-3, weight_decay=0.01, neck_dropout: float = None):
     partitions = [0, 1, 2, 3, 4]
     all_fold_results = []
 
@@ -213,7 +213,7 @@ def train_all_folds(device, neck_type: str = "identity", batch_size=32, warmup_e
         print(f"\n{'=' * 20} Fold {p} | neck={neck_type} {'=' * 20}")
 
         # Build a fresh model for each fold
-        neck = build_neck(neck_type)
+        neck = build_neck(neck_type, dropout=neck_dropout)
         model = ActiveSitePredictor(neck=neck, head_hidden_dim=512)
         model.to(device)
 
@@ -299,6 +299,11 @@ def train_all_folds(device, neck_type: str = "identity", batch_size=32, warmup_e
                     "epoch": i,
                     "neck_type": neck_type,
                     "model": model.state_dict(),
+                    "warmup_epochs": warmup_epochs,
+                    "total_epochs": total_epochs,
+                    "learning_rate": lr,
+                    "weight_decay": weight_decay,
+                    "neck_dropout": neck_dropout,
                     "metrics": dev_results,
                     "threshold": dev_results["threshold"],
                 }, os.path.join(model_dir, f"best_model_fold_{p}.pt"))
@@ -316,7 +321,8 @@ def main():
 
     print(f"Using device: {device}")
 
-    train_all_folds(device, neck_type="identity")
+    train_all_folds(device, neck_type="identity", warmup_epochs=5, total_epochs=90)
+    train_all_folds(device, neck_type="attention", warmup_epochs=5, total_epochs=120, neck_dropout=0.2)
 
 
 if __name__ == "__main__":
