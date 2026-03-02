@@ -21,7 +21,7 @@ class WeightedFocalLoss(nn.Module):
 
         # bce[i] = -[y * log(sigmoid(x)) + (1-y) * log(1 - sigmoid(x))]
         # reduction = "none" means we keep the loss for each element in the batch and sequence, because I multiply each position's loss by different focal weight
-        bce_loss = F.binary_cross_entropy_with_logits(logits.squeeze(2), targets, reduction="none")  # [batch, seq_len]
+        bce_loss = F.binary_cross_entropy_with_logits(logits, targets, reduction="none")  # [batch, seq_len]
 
         # get the probabilities
         probs = torch.sigmoid(logits)
