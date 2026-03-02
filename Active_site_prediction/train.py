@@ -5,14 +5,14 @@ from torchmetrics import MetricCollection
 from torchmetrics.functional.classification import binary_matthews_corrcoef, binary_f1_score, binary_precision, binary_recall, binary_average_precision
 from data_utils import PrecomputedUniprotDataset
 from focal_loss import WeightedFocalLoss
-from model import ActiveSitePredictor, IdentityNeck, AttentionNeck
+from model import ActiveSitePredictorHead, IdentityNeck, AttentionNeck
 import numpy as np
 import os
 import datetime
 import wandb
 
 
-def train_one_epoch(model: nn.Module, criterion: nn.Module, optimizer: torch.optim, train_loader: DataLoader, train_metrics: MetricCollection, device: torch.device):
+def train_one_epoch(model: nn.Module, criterion: nn.Module, optimizer: torch.optim, train_loader: DataLoader, device: torch.device):
     model.train()
     total_loss = 0.0
     num_batches = len(train_loader)
@@ -214,7 +214,7 @@ def train_all_folds(device, neck_type: str = "identity", batch_size=32, warmup_e
 
         # Build a fresh model for each fold
         neck = build_neck(neck_type, dropout=neck_dropout)
-        model = ActiveSitePredictor(neck=neck, head_hidden_dim=512)
+        model = ActiveSitePredictorHead(neck=neck, head_hidden_dim=512)
         model.to(device)
 
         # Datasets
@@ -232,7 +232,7 @@ def train_all_folds(device, neck_type: str = "identity", batch_size=32, warmup_e
         assert n_total > 0, "Total number of residues in training set is 0"
 
         pos_ratio = float(n_positive) / float(n_total)
-        alpha = 1.0 - pos_ratio
+        alpha = torch.tensor(1.0 - pos_ratio, dtype=torch.float32)
         criterion = WeightedFocalLoss(alpha=alpha, gamma=2.0)
         print(f"  pos_ratio={pos_ratio:.4f}, alpha={alpha:.4f}")
 
