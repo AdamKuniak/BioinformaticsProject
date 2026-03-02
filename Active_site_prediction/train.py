@@ -226,8 +226,11 @@ def train_all_folds(device, neck_type: str = "identity", batch_size=32, warmup_e
         dev_loader = DataLoader(dev_dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
         # Criterion
-        n_positive = train_dataset.labels.sum()
-        n_total = (train_dataset.masks == 1).sum()
+        n_positive = np.array(train_dataset.labels).sum()
+        n_total = np.array(train_dataset.masks).sum()
+
+        assert n_total > 0, "Total number of residues in training set is 0"
+
         pos_ratio = float(n_positive) / float(n_total)
         alpha = 1.0 - pos_ratio
         criterion = WeightedFocalLoss(alpha=alpha, gamma=2.0)
