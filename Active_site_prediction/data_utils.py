@@ -54,7 +54,8 @@ class UniprotDataset(torch.utils.data.Dataset):
         super().__init__()
         self.tokenizer = tokenizer
         self.max_length = max_length
-        self.data = json.load(open(root, "r"))
+        with open(root, "r") as f:
+            self.data = json.load(f)
 
         if fold is not None:
             self.data = [rec for rec in self.data if rec["fold"] in fold]
