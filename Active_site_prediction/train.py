@@ -1,18 +1,17 @@
 from torch.utils.data import DataLoader
 import torch
 import torch.nn as nn
-from torchmetrics import MetricCollection
 from torchmetrics.functional.classification import binary_matthews_corrcoef, binary_f1_score, binary_precision, binary_recall, binary_average_precision
 from data_utils import PrecomputedUniprotDataset
 from focal_loss import WeightedFocalLoss
-from model import ActiveSitePredictorHead, IdentityNeck, AttentionNeck
+from model import ActiveSitePredictor, ActiveSitePredictorHead, IdentityNeck, AttentionNeck
 import numpy as np
 import os
 import datetime
 import wandb
 
 
-def train_one_epoch(model: nn.Module, criterion: nn.Module, optimizer: torch.optim, train_loader: DataLoader, device: torch.device):
+def train_one_epoch(model: nn.Module, criterion: nn.Module, optimizer: torch.optim, train_loader: DataLoader, device: torch.device, last_n_layers: int = 0):
     model.train()
     total_loss = 0.0
     num_batches = len(train_loader)
@@ -29,7 +28,7 @@ def train_one_epoch(model: nn.Module, criterion: nn.Module, optimizer: torch.opt
         # clear gradients
         optimizer.zero_grad()
         # forward pass
-        logits = model(embeddings, mask)
+        logits = model(embeddings, mask, last_n_layers=last_n_layers)
         # Loss
         torch_mask = (mask == 0)  # Torch has a different convention for masking than Hugging Face
         loss = criterion(logits, labels, torch_mask)
@@ -46,7 +45,7 @@ def train_one_epoch(model: nn.Module, criterion: nn.Module, optimizer: torch.opt
         all_masks.append((torch_mask == 0).cpu())
 
         if (batch_idx + 1) % 10 == 0 or (batch_idx + 1) == num_batches:
-            print(f"\r  Train batch {batch_idx+1}/{num_batches} | loss: {loss.item():.4f}", end="", flush=True)
+            print(f"\r  Train batch {batch_idx + 1}/{num_batches} | loss: {loss.item():.4f}", end="", flush=True)
 
     # Compute epoch-level metrics over all accumulated predictions
     all_logits = torch.cat(all_logits, dim=0)
@@ -72,11 +71,11 @@ def compute_metrics(logits: torch.Tensor, targets: torch.Tensor, padding_mask: t
     preds = (probs >= threshold).long()
 
     return {
-        "mcc":       binary_matthews_corrcoef(preds, targets).item(),
-        "f1":        binary_f1_score(preds, targets).item(),
+        "mcc": binary_matthews_corrcoef(preds, targets).item(),
+        "f1": binary_f1_score(preds, targets).item(),
         "precision": binary_precision(preds, targets).item(),
-        "recall":    binary_recall(preds, targets).item(),
-        "auprc":     binary_average_precision(probs, targets).item(),
+        "recall": binary_recall(preds, targets).item(),
+        "auprc": binary_average_precision(probs, targets).item(),
     }
 
 
@@ -109,7 +108,7 @@ def find_optimal_threshold(all_logits: torch.Tensor, all_labels: torch.Tensor, p
     return best_thresh, best_mcc
 
 
-def evaluate(model, loader, criterion, device):
+def evaluate(model, loader, criterion, device, last_n_layers: int = 0):
     model.eval()
     total_loss = 0.0
     num_batches = len(loader)
@@ -125,7 +124,7 @@ def evaluate(model, loader, criterion, device):
             labels = batch["label"].to(device, dtype=torch.float32)
 
             torch_mask = (mask == 0)  # Torch has a different convention for masking than Hugging Face
-            logits = model(embeddings, mask)
+            logits = model(embeddings, mask, last_n_layers=last_n_layers)
             loss = criterion(logits, labels, torch_mask)
             total_loss += loss.item()
 
@@ -135,12 +134,12 @@ def evaluate(model, loader, criterion, device):
             all_masks.append(torch_mask.cpu())
 
             if (batch_idx + 1) % 10 == 0 or (batch_idx + 1) == num_batches:
-                print(f"\r  Eval batch {batch_idx+1}/{num_batches} | loss: {loss.item():.4f}", end="", flush=True)
+                print(f"\r  Eval batch {batch_idx + 1}/{num_batches} | loss: {loss.item():.4f}", end="", flush=True)
 
     # [n_proteins, seq_len]
     all_logits = torch.cat(all_logits, dim=0)
     all_labels = torch.cat(all_labels, dim=0)
-    all_masks = torch.cat(all_masks,  dim=0)
+    all_masks = torch.cat(all_masks, dim=0)
 
     # Find the best threshold on this validation set
     best_threshold, best_mcc = find_optimal_threshold(all_logits, all_labels, all_masks)
@@ -186,7 +185,7 @@ def print_final_summary(all_fold_results, output_file="final_summary.txt"):
 
 def build_neck(neck_type: str, hidden_dim: int = 1280, dropout: float = None) -> nn.Module:
     """
-        Neck factory to build the neck module based on the specified type.
+    Neck factory to build the neck module based on the specified type.
     """
     valid = ["identity", "attention"]
     if neck_type not in valid:
@@ -199,7 +198,8 @@ def build_neck(neck_type: str, hidden_dim: int = 1280, dropout: float = None) ->
         return AttentionNeck(hidden_dim=hidden_dim, n_layers=1, n_head=8, dropout=dropout)
 
 
-def train_all_folds(device, neck_type: str = "identity", batch_size=32, warmup_epochs=5, total_epochs=80, lr=1e-3, weight_decay=0.01, neck_dropout: float = None):
+def train_all_folds(device, neck_type: str = "identity", batch_size=32, warmup_epochs=5, total_epochs=80, lr=1e-3, weight_decay=0.01, neck_dropout: float = None, head_hidden_dim: int = 512,
+                    precomputed_root="./data/train_val/precomputed_embeddings"):
     partitions = [0, 1, 2, 3, 4]
     all_fold_results = []
 
@@ -212,17 +212,37 @@ def train_all_folds(device, neck_type: str = "identity", batch_size=32, warmup_e
     for p in partitions:
         print(f"\n{'=' * 20} Fold {p} | neck={neck_type} {'=' * 20}")
 
+        # Datasets depending on whether I finetune or not
+        train_folds = [f for f in partitions if f != p]
+        train_dataset = PrecomputedUniprotDataset(fold=train_folds, root=precomputed_root)
+        dev_dataset = PrecomputedUniprotDataset(fold=[p], root=precomputed_root)
+
         # Build a fresh model for each fold
         neck = build_neck(neck_type, dropout=neck_dropout)
-        model = ActiveSitePredictorHead(neck=neck, head_hidden_dim=512)
+
+        last_n_layers = train_dataset.last_n_layers
+
+        if last_n_layers > 0:
+            model = ActiveSitePredictor(neck=neck, head_hidden_dim=head_hidden_dim)
+            model.unfreeze_last_n_layers(last_n_layers)
+        else:
+            model = ActiveSitePredictorHead(neck=neck, head_hidden_dim=head_hidden_dim)
+
         model.to(device)
 
-        # Datasets
-        train_folds = [f for f in partitions if f != p]
-        train_dataset = PrecomputedUniprotDataset(fold=train_folds)
-        dev_dataset = PrecomputedUniprotDataset(fold=[p])
+        # Optimizer — differential lr if fine-tuning
+        if last_n_layers > 0:
+            backbone_params = [p for p in model.backbone.parameters() if p.requires_grad]
+            head_params = (list(model.neck.parameters()) + list(model.classification_head.parameters()))
+            optimizer = torch.optim.AdamW([
+                {"params": backbone_params, "lr": lr * 0.01},
+                {"params": head_params, "lr": lr},
+            ], weight_decay=weight_decay)
+        else:
+            optimizer = torch.optim.AdamW(
+                model.parameters(), lr=lr, weight_decay=weight_decay)
 
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0, pin_memory=True)
         dev_loader = DataLoader(dev_dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
         # Criterion
@@ -236,8 +256,10 @@ def train_all_folds(device, neck_type: str = "identity", batch_size=32, warmup_e
         criterion = WeightedFocalLoss(alpha=alpha, gamma=2.0)
         print(f"  pos_ratio={pos_ratio:.4f}, alpha={alpha:.4f}")
 
-        # Optimizer and scheduler
-        optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+        # params
+        backbone_params = [p for p in model.backbone.parameters() if p.requires_grad]
+        head_params = (list(model.neck.parameters()) + list(model.classification_head.parameters()))
+
         warmup_scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.01, end_factor=1.0, total_iters=warmup_epochs)
         train_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_epochs - warmup_epochs)
         scheduler = torch.optim.lr_scheduler.SequentialLR(optimizer, schedulers=[warmup_scheduler, train_scheduler], milestones=[warmup_epochs])
@@ -253,6 +275,7 @@ def train_all_folds(device, neck_type: str = "identity", batch_size=32, warmup_e
         )
         wandb.config.update({
             "neck_type": neck_type,
+            "last_n_layers": last_n_layers,
             "learning_rate": lr,
             "batch_size": batch_size,
             "weight_decay": weight_decay,
@@ -266,13 +289,13 @@ def train_all_folds(device, neck_type: str = "identity", batch_size=32, warmup_e
         best_results_this_fold = None
 
         for i in range(total_epochs):
-            train_loss, train_results = train_one_epoch(model, criterion, optimizer, train_loader, device)
+            print(f"Epoch {i + 1}/{total_epochs} | ")
+            train_loss, train_results = train_one_epoch(model, criterion, optimizer, train_loader, device, last_n_layers=last_n_layers)
             scheduler.step()
 
-            dev_loss, dev_results = evaluate(model, dev_loader, criterion, device)
+            dev_loss, dev_results = evaluate(model, dev_loader, criterion, device, last_n_layers=last_n_layers)
 
-            print(f"Epoch {i + 1}/{total_epochs} | "
-                  f"train_loss={train_loss:.4f} train_mcc={train_results['mcc']:.4f} | "
+            print(f"train_loss={train_loss:.4f} train_mcc={train_results['mcc']:.4f} | "
                   f"dev_loss={dev_loss:.4f} dev_mcc={dev_results['mcc']:.4f} "
                   f"dev_auprc={dev_results['auprc']:.4f} "
                   f"thresh={dev_results['threshold']:.3f}")
@@ -301,12 +324,13 @@ def train_all_folds(device, neck_type: str = "identity", batch_size=32, warmup_e
                 torch.save({
                     "epoch": i,
                     "neck_type": neck_type,
+                    "neck_dropout": neck_dropout,
+                    "head_hidden_dim": 512,
                     "model": model.state_dict(),
                     "warmup_epochs": warmup_epochs,
                     "total_epochs": total_epochs,
                     "learning_rate": lr,
                     "weight_decay": weight_decay,
-                    "neck_dropout": neck_dropout,
                     "metrics": dev_results,
                     "threshold": dev_results["threshold"],
                 }, os.path.join(model_dir, f"best_model_fold_{p}.pt"))
@@ -324,8 +348,8 @@ def main():
 
     print(f"Using device: {device}")
 
-    train_all_folds(device, neck_type="identity", warmup_epochs=5, total_epochs=90)
-    train_all_folds(device, neck_type="attention", warmup_epochs=5, total_epochs=120, neck_dropout=0.2)
+    train_all_folds(device, neck_type="identity", warmup_epochs=5, total_epochs=80, head_hidden_dim=512, precomputed_root="./data/train_val/precomputed_embeddings_last_2_frozen")
+    # train_all_folds(device, neck_type="attention", warmup_epochs=5, total_epochs=80, weight_decay=0.05, neck_dropout=0.3)
 
 
 if __name__ == "__main__":
