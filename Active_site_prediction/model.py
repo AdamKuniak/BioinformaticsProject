@@ -22,16 +22,37 @@ class ActiveSitePredictor(nn.Module):
             hidden_dim=head_hidden_dim
         )
 
-    def forward(self, x: torch.Tensor, mask: torch.Tensor):
-        assert x.dim() == 2, f"Expected input shape [batch, seq_len], got {x.shape}"
-        assert mask.shape == x.shape, f"mask shape {mask.shape} must match input shape {x.shape}"
+    def unfreeze_last_n_layers(self, n: int):
+        """
+        Unfreeze the last n transformer layers of the ESM-2 backbone..
+        """
+        assert 0 < n <= len(self.backbone.encoder.layer), f"n must be between 1 and {len(self.backbone.encoder.layer)}, got {n}"
 
-        with torch.no_grad():
-            outputs = self.backbone(input_ids=x, attention_mask=mask)
-            embeddings = outputs.last_hidden_state
-            # embeddings = outputs.last_hidden_state[:, 1:-1, :]  # strip <cls> and <eos>
+        for layer in self.backbone.encoder.layer[-n:]:
+            for param in layer.parameters():
+                param.requires_grad = True
 
-        # padding mask for the necks
+        # Also unfreeze the final layer norm
+        for param in self.backbone.encoder.emb_layer_norm_after.parameters():
+            param.requires_grad = True
+
+    def forward(self, x: torch.Tensor, mask: torch.Tensor, last_n_layers: int = None):
+        assert x.dim() == 3, f"Expected precomputed embeddings [batch, seq_len, hidden_dim], got {x.shape}"
+        assert mask.shape == x.shape[:2], f"mask shape {mask.shape} must match {x.shape[:2]}"
+
+        if last_n_layers is None:
+            embeddings = x.float()
+        else:
+            total_layers = len(self.backbone.encoder.layer)
+            from_layer = total_layers - last_n_layers
+            embeddings = x.float()
+
+            # Compute once outside the loop — doesn't change between layers
+            extended_mask = self.backbone.get_extended_attention_mask(mask, (mask.shape[0], mask.shape[1])).to(embeddings.device)
+
+            for layer in self.backbone.encoder.layer[from_layer:]:
+                embeddings = layer(hidden_states=embeddings, attention_mask=extended_mask)
+
         padding_mask = (mask == 0)
         neck_output = self.neck(embeddings, padding_mask)
         return self.classification_head(neck_output)
@@ -105,7 +126,7 @@ class AttentionNeck(nn.Module):
         self.encoder_layer = nn.TransformerEncoderLayer(
             d_model=self.output_dim,  # matches ESM-2 embedding size
             nhead=n_head,
-            dim_feedforward=512,  # dimension of the FFN in the transformer layer
+            dim_feedforward=1280,  # dimension of the FFN in the transformer layer
             dropout=dropout,
             batch_first=True
         )
