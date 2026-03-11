@@ -102,7 +102,7 @@ class UniprotDataset(torch.utils.data.Dataset):
     """
     Uniprot train/validation dataset, which contains sequences and binary labels indicating whether each residue is part of an active site.
     """
-    def __init__(self, tokenizer, root="./data/train_val/train_val_dataset.json", fold=None, max_length=1024):
+    def __init__(self, tokenizer, root="./data/train_val/train_val_dataset_20.json", fold=None, max_length=1024):
         super().__init__()
         self.tokenizer = tokenizer
         self.max_length = max_length
@@ -148,7 +148,7 @@ class PrecomputedUniprotDataset(torch.utils.data.Dataset):
     Dataset that loads precomputed ESM-2 embeddings from memory-mapped files for the Uniprot dataset.
     Run precompute_embeddings.py first to generate the required files.
     """
-    def __init__(self, fold=None, root="./data/train_val/precomputed_embeddings"):
+    def __init__(self, fold=None, root="./data/uniprot/precomputed_embeddings"):
         super().__init__()
         metadata = torch.load(os.path.join(root, "metadata.pt"), weights_only=False)
         self._total = metadata["length"]
