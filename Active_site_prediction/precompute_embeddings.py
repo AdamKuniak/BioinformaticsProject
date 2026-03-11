@@ -9,12 +9,12 @@ from tqdm import tqdm
 import argparse
 
 
-def precompute_embeddings(mode="train", batch_size=16, pretrained_model="facebook/esm2_t33_650M_UR50D", max_length=1024, flush_every=50, last_n_layers: int = None):
+def precompute_embeddings(dataset="uniprot", batch_size=16, pretrained_model="facebook/esm2_t33_650M_UR50D", max_length=1024, flush_every=50, last_n_layers: int = None):
     """
     Precompute ESM-2 embeddings up to the last frozen layer.
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}, Mode: {mode}, Fine-tunning last {last_n_layers} layers")
+    print(f"Using device: {device}, Dataset: {dataset}, Fine-tunning last {last_n_layers} layers")
 
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model)
     backbone = EsmModel.from_pretrained(pretrained_model).to(device)
@@ -33,14 +33,14 @@ def precompute_embeddings(mode="train", batch_size=16, pretrained_model="faceboo
         print(f"  Saving full backbone output (all {total_layers} layers frozen)")
 
     # Dataset and output directory
-    if mode == "train":
-        output_dir = (f"./data/train_val/precomputed_embeddings_last_{last_n_layers}_unfrozen" if last_n_layers is not None else "./data/train_val/precomputed_embeddings")
+    if dataset == "uniprot":
+        output_dir = (f"./data/uniprot/precomputed_embeddings_last_{last_n_layers}_unfrozen" if last_n_layers is not None else "./data/uniprot/precomputed_embeddings")
         dataset = UniprotDataset(tokenizer, fold=None, max_length=max_length)
-    elif mode == "test":
-        output_dir = (f"./data/test/precomputed_embeddings_last_{last_n_layers}_unfrozen" if last_n_layers is not None else "./data/test/precomputed_embeddings")
+    elif dataset == "m-csa":
+        output_dir = (f"./data/m_csa/precomputed_embeddings_last_{last_n_layers}_unfrozen" if last_n_layers is not None else "./data/m_csa/precomputed_embeddings")
         dataset = MCSADataset(tokenizer, max_length=max_length)
     else:
-        raise ValueError(f"Unknown mode: '{mode}'. Choose 'train' or 'test'.")
+        raise ValueError(f"Unknown mode: '{dataset}'. Choose 'uniprot' or 'm-csa'.")
 
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=0, pin_memory=True)
     total = len(dataset)
@@ -108,7 +108,7 @@ def precompute_embeddings(mode="train", batch_size=16, pretrained_model="faceboo
                 attention_mask = torch.nn.functional.pad(attention_mask, (0, pad))
 
             bs = embeddings.size(0)
-            emb_mmap[idx:idx + bs]  = embeddings.half().cpu().numpy()
+            emb_mmap[idx:idx + bs] = embeddings.half().cpu().numpy()
             mask_mmap[idx:idx + bs] = attention_mask.cpu().numpy().astype(np.bool_)
             idx += bs
 
@@ -123,10 +123,10 @@ def precompute_embeddings(mode="train", batch_size=16, pretrained_model="faceboo
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", type=str, default="train", choices=["train", "test"], help="'train' for Uniprot train/val, 'test' for M-CSA test set")
+    parser.add_argument("--dataset", type=str, default="uniprot", choices=["uniprot", "m-csa"])
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--max_length", type=int, default=1024)
     parser.add_argument("--flush_every", type=int, default=50)
     args = parser.parse_args()
 
-    precompute_embeddings(mode="train", pretrained_model="facebook/esm2_t36_3B_UR50D")
+    precompute_embeddings(dataset="uniprot")
