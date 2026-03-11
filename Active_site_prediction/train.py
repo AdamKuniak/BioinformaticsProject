@@ -200,11 +200,12 @@ def make_fold_splits(fold: int, all_folds: list[int]) -> tuple[list[int], int, i
     return train_folds, val_fold, test_fold
 
 
-def train_all_folds(device, neck_type: str = "identity", batch_size=32, warmup_epochs=5, total_epochs=80, lr=1e-3, weight_decay=0.01, neck_dropout: float = None, head_hidden_dim: int = 512,
-                    precomputed_root="./data/train_val/precomputed_embeddings"):
+def train_all_folds(device, neck_type: str = "identity", batch_size=32, warmup_epochs=5, total_epochs=80, lr=1e-3, weight_decay=0.01, neck_dropout: float = None, head_hidden_dim: int = 512, precomputed_root="./data/train_val/precomputed_embeddings"):
     all_folds = [0, 1, 2, 3, 4]
     all_fold_val_results = []
     all_fold_test_results = []
+
+    last_n_layers = 0
 
     parent_run_dir = f"results/{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
     os.makedirs(parent_run_dir, exist_ok=True)
@@ -218,8 +219,8 @@ def train_all_folds(device, neck_type: str = "identity", batch_size=32, warmup_e
         print(f"\n{'=' * 20} Run {fold} | train={train_folds} val=[{val_fold}] test=[{test_fold}] | neck={neck_type} {'=' * 20}")
 
         train_dataset = PrecomputedUniprotDataset(fold=train_folds, root=precomputed_root)
-        val_dataset   = PrecomputedUniprotDataset(fold=[val_fold],   root=precomputed_root)
-        test_dataset  = PrecomputedUniprotDataset(fold=[test_fold],  root=precomputed_root)
+        val_dataset = PrecomputedUniprotDataset(fold=[val_fold], root=precomputed_root)
+        test_dataset = PrecomputedUniprotDataset(fold=[test_fold], root=precomputed_root)
 
         neck = build_neck(neck_type, dropout=neck_dropout)
         last_n_layers = train_dataset.last_n_layers
@@ -242,9 +243,9 @@ def train_all_folds(device, neck_type: str = "identity", batch_size=32, warmup_e
         else:
             optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True,  num_workers=0, pin_memory=True)
-        val_loader = DataLoader(val_dataset,   batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
-        test_loader = DataLoader(test_dataset,  batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0, pin_memory=True)
+        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
+        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
         n_positive = np.array(train_dataset.labels).sum()
         n_total = np.array(train_dataset.masks).sum()
@@ -360,7 +361,7 @@ def train_all_folds(device, neck_type: str = "identity", batch_size=32, warmup_e
         all_fold_test_results.append(test_results)
         wandb.finish()
 
-    print_final_summary(all_fold_val_results, all_fold_test_results, output_file=os.path.join(parent_run_dir, f"final_summary_{neck_type}.txt"))
+    print_final_summary(all_fold_val_results, all_fold_test_results, output_file=os.path.join(parent_run_dir, f"final_summary_{neck_type}_last_{last_n_layers}_unfrozen.txt"))
 
 
 def main():
@@ -371,6 +372,8 @@ def main():
     print(f"Using device: {device}")
 
     train_all_folds(device, neck_type="identity", warmup_epochs=5, total_epochs=80, head_hidden_dim=512, precomputed_root="./data/uniprot/precomputed_embeddings")
+    train_all_folds(device, neck_type="attention", warmup_epochs=5, total_epochs=80, head_hidden_dim=512, precomputed_root="./data/uniprot/precomputed_embeddings")
+    train_all_folds(device, neck_type="identity", warmup_epochs=5, total_epochs=80, head_hidden_dim=512, precomputed_root="./data/uniprot/precomputed_embeddings_last_1_unfrozen")
 
 
 if __name__ == "__main__":
