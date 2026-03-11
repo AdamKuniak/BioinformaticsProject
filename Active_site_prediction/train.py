@@ -361,7 +361,7 @@ def train_all_folds(device, neck_type: str = "identity", batch_size=32, warmup_e
         all_fold_test_results.append(test_results)
         wandb.finish()
 
-    print_final_summary(all_fold_val_results, all_fold_test_results, output_file=os.path.join(parent_run_dir, f"final_summary_{neck_type}_last_{last_n_layers}_unfrozen.txt"))
+    print_final_summary(all_fold_val_results, all_fold_test_results, output_file=os.path.join(parent_run_dir, f"results/uni_20/final_summary_{neck_type}_last_{last_n_layers}_unfrozen.txt"))
 
 
 def main():
