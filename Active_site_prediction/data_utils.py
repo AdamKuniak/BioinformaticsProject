@@ -156,7 +156,7 @@ class PrecomputedUniprotDataset(torch.utils.data.Dataset):
         self._hidden_dim = metadata["hidden_dim"]
         self._root = root
 
-        self.freeze_layers = metadata.get("freeze_layers", None)
+        self.last_n_layers = metadata.get("last_n_layers", 0)
 
         all_folds = metadata["fold"]  
         if fold is not None:
