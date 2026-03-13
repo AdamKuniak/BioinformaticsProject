@@ -9,7 +9,7 @@ from tqdm import tqdm
 import argparse
 
 
-def precompute_embeddings(dataset="uniprot", batch_size=16, pretrained_model="facebook/esm2_t33_650M_UR50D", max_length=1024, flush_every=50, last_n_layers: int = None):
+def precompute_embeddings(dataset="uniprot", batch_size=16, pretrained_model="facebook/esm2_t33_650M_UR50D", max_length=1024, flush_every=50, last_n_layers: int = 0):
     """
     Precompute ESM-2 embeddings up to the last frozen layer.
     """
@@ -26,7 +26,7 @@ def precompute_embeddings(dataset="uniprot", batch_size=16, pretrained_model="fa
     hidden_dim = backbone.config.hidden_size   # 1280 for 650M
 
     # Validate fine-tuned layers
-    if last_n_layers is not None:
+    if last_n_layers < 0:
         assert 0 < last_n_layers < total_layers, f"freeze_layers must be between 1 and {total_layers-1}, got {last_n_layers}"
         print(f"  Saving output of fine-tuning last {last_n_layers} layers")
     else:
@@ -34,11 +34,17 @@ def precompute_embeddings(dataset="uniprot", batch_size=16, pretrained_model="fa
 
     # Dataset and output directory
     if dataset == "uniprot":
-        output_dir = (f"./data/uniprot/precomputed_embeddings_last_{last_n_layers}_unfrozen" if last_n_layers is not None else "./data/uniprot/precomputed_embeddings")
+        output_dir = (f"./data/uniprot/precomputed_embeddings_last_{last_n_layers}_unfrozen" if last_n_layers > 0 else "./data/uniprot/precomputed_embeddings")
         dataset = UniprotDataset(tokenizer, fold=None, max_length=max_length)
     elif dataset == "m-csa":
-        output_dir = (f"./data/m_csa/precomputed_embeddings_last_{last_n_layers}_unfrozen" if last_n_layers is not None else "./data/m_csa/precomputed_embeddings")
+        output_dir = (f"./data/m_csa/precomputed_embeddings_last_{last_n_layers}_unfrozen" if last_n_layers > 0 else "./data/m_csa/precomputed_embeddings")
         dataset = MCSADataset(tokenizer, max_length=max_length)
+    elif dataset == "squidly_14230":
+        output_dir = (f"./data/squidly/precomputed_embeddings_last_{last_n_layers}_unfrozen" if last_n_layers > 0 else "./data/squidly/precomputed_embeddings")
+        dataset = UniprotDataset(tokenizer, root="./data/squidly/uni14230_clean.json", fold=None, max_length=max_length)
+    elif dataset == "squidly_3175":
+        output_dir = (f"./data/squidly/precomputed_embeddings_last_{last_n_layers}_unfrozen" if last_n_layers > 0 else "./data/squidly/precomputed_embeddings")
+        dataset = UniprotDataset(tokenizer, root="./data/squidly/uni3175_clean.json", fold=None, max_length=max_length)
     else:
         raise ValueError(f"Unknown mode: '{dataset}'. Choose 'uniprot' or 'm-csa'.")
 
@@ -58,6 +64,7 @@ def precompute_embeddings(dataset="uniprot", batch_size=16, pretrained_model="fa
     # metadata
     metadata = {
         "labels": torch.stack([pad_label(rec["label"]) for rec in dataset.data]),
+        "fold": np.array([rec["fold"] for rec in dataset.data]),
         "length": total,
         "max_length": max_length,
         "hidden_dim": hidden_dim,
@@ -85,7 +92,7 @@ def precompute_embeddings(dataset="uniprot", batch_size=16, pretrained_model="fa
             input_ids = batch["input_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
 
-            if last_n_layers is None:
+            if last_n_layers == 0:
                 # full backbone frozen
                 outputs = backbone(input_ids=input_ids, attention_mask=attention_mask)
                 embeddings = outputs.last_hidden_state
@@ -123,10 +130,13 @@ def precompute_embeddings(dataset="uniprot", batch_size=16, pretrained_model="fa
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset", type=str, default="uniprot", choices=["uniprot", "m-csa"])
+    parser.add_argument("--dataset", type=str, default="uniprot", choices=["uniprot", "m-csa", "squidly_3175", "squidly_14230"])
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--max_length", type=int, default=1024)
     parser.add_argument("--flush_every", type=int, default=50)
     args = parser.parse_args()
 
-    precompute_embeddings(dataset="uniprot")
+    precompute_embeddings(dataset="squidly_3175")
+    precompute_embeddings(dataset="squidly_14230")
+    precompute_embeddings(dataset="squidly_3175", last_n_layers=1)
+    precompute_embeddings(dataset="squidly_14230", last_n_layers=1)
