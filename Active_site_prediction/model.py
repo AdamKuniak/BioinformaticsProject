@@ -74,7 +74,7 @@ class ActiveSitePredictorHead(nn.Module):
             hidden_dim=head_hidden_dim
         )
 
-    def forward(self, embeddings: torch.Tensor, mask: torch.Tensor):
+    def forward(self, embeddings: torch.Tensor, mask: torch.Tensor, last_n_layers: int = 0):
         assert embeddings.dim() == 3, f"Expected [batch, seq_len, hidden_dim], got {embeddings.shape}"
 
         padding_mask = (mask == 0)
