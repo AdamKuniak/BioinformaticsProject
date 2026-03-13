@@ -179,7 +179,7 @@ def print_final_summary(all_fold_val_results, all_fold_test_results, output_file
     print(f"\nSummary saved to {output_file}")
 
 
-def build_neck(neck_type: str, hidden_dim: int = 1280, dropout: float = None) -> nn.Module:
+def build_neck(neck_type: str, hidden_dim: int = 1280, dropout: float = 0.1) -> nn.Module:
     valid = ["identity", "attention"]
     if neck_type not in valid:
         raise ValueError(f"Unknown neck type: '{neck_type}'. Valid options: {valid}")
@@ -200,14 +200,17 @@ def make_fold_splits(fold: int, all_folds: list[int]) -> tuple[list[int], int, i
     return train_folds, val_fold, test_fold
 
 
-def train_all_folds(device, neck_type: str = "identity", batch_size=32, warmup_epochs=5, total_epochs=80, lr=1e-3, weight_decay=0.01, neck_dropout: float = None, head_hidden_dim: int = 512, precomputed_root="./data/train_val/precomputed_embeddings"):
+def train_all_folds(device, neck_type: str = "identity", batch_size=32, warmup_epochs=5, total_epochs=80, lr=1e-3, weight_decay=0.01, neck_dropout: float = 0.1, head_hidden_dim: int = 512, precomputed_root="./data/train_val/precomputed_embeddings"):
+    """
+    Performs 5-fold cross-validation training and evaluation on the Uniprot dataset using precomputed ESM-2 embeddings.
+    """
     all_folds = [0, 1, 2, 3, 4]
     all_fold_val_results = []
     all_fold_test_results = []
 
     last_n_layers = 0
 
-    parent_run_dir = f"results/{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    parent_run_dir = f"results/uni_20/{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
     os.makedirs(parent_run_dir, exist_ok=True)
 
     model_dir = os.path.join(parent_run_dir, "models")
@@ -361,7 +364,7 @@ def train_all_folds(device, neck_type: str = "identity", batch_size=32, warmup_e
         all_fold_test_results.append(test_results)
         wandb.finish()
 
-    print_final_summary(all_fold_val_results, all_fold_test_results, output_file=os.path.join(parent_run_dir, f"results/uni_20/final_summary_{neck_type}_last_{last_n_layers}_unfrozen.txt"))
+    print_final_summary(all_fold_val_results, all_fold_test_results, output_file=os.path.join(parent_run_dir, f"final_summary_{neck_type}_last_{last_n_layers}_unfrozen.txt"))
 
 
 def main():
@@ -371,8 +374,8 @@ def main():
 
     print(f"Using device: {device}")
 
-    train_all_folds(device, neck_type="identity", warmup_epochs=5, total_epochs=80, head_hidden_dim=512, precomputed_root="./data/uniprot/precomputed_embeddings")
-    train_all_folds(device, neck_type="attention", warmup_epochs=5, total_epochs=80, head_hidden_dim=512, precomputed_root="./data/uniprot/precomputed_embeddings")
+    #train_all_folds(device, neck_type="identity", warmup_epochs=5, total_epochs=80, head_hidden_dim=512, precomputed_root="./data/uniprot/precomputed_embeddings")
+    #train_all_folds(device, neck_type="attention", warmup_epochs=5, total_epochs=80, head_hidden_dim=512, precomputed_root="./data/uniprot/precomputed_embeddings")
     train_all_folds(device, neck_type="identity", warmup_epochs=5, total_epochs=80, head_hidden_dim=512, precomputed_root="./data/uniprot/precomputed_embeddings_last_1_unfrozen")
 
 
