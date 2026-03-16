@@ -54,7 +54,7 @@ class PrecomputedMCSADataset(torch.utils.data.Dataset):
         super().__init__()
         metadata = torch.load(os.path.join(root, "metadata.pt"),  weights_only=False)
 
-        self._total = metadata["total"]      # note: test metadata uses "total" not "length"
+        self._total = metadata["length"]
         self._max_length = metadata["max_length"]
         self._hidden_dim = metadata["hidden_dim"]
         self._root = root
@@ -202,3 +202,48 @@ class PrecomputedUniprotDataset(torch.utils.data.Dataset):
 
         # only the masks for the proteins in this specific fold
         return self._masks[self.indices]
+
+
+class PrecomputedSquidlyDataset(torch.utils.data.Dataset):
+    """
+    Dataset that loads precomputed ESM-2 embeddings from memory-mapped files for the Squidly dataset.
+    Run precompute_embeddings.py first to generate the required files.
+    No folds — use separate root directories for train and test sets.
+    """
+    def __init__(self, root="./data/squidly/precomputed_embeddings"):
+        super().__init__()
+        metadata = torch.load(os.path.join(root, "metadata.pt"), weights_only=False)
+        self._total = metadata["length"]
+        self._max_length = metadata["max_length"]
+        self._hidden_dim = metadata["hidden_dim"]
+        self._root = root
+        self.last_n_layers = metadata.get("last_n_layers", 0)
+        self.indices = np.arange(self._total)
+        self.labels = metadata["labels"].clone()
+        del metadata
+        self._embeddings = None
+        self._masks = None
+    def open_memmaps(self):
+        self._embeddings = np.memmap(
+            os.path.join(self._root, "embeddings.dat"),
+            dtype=np.float16, mode="r", shape=(self._total, self._max_length, self._hidden_dim)
+        )
+        self._masks = np.memmap(
+            os.path.join(self._root, "masks.dat"),
+            dtype=np.bool_, mode="r", shape=(self._total, self._max_length)
+        )
+    def __len__(self):
+        return self._total
+    def __getitem__(self, idx):
+        if self._embeddings is None:
+            self.open_memmaps()
+        return {
+            "embedding": torch.from_numpy(self._embeddings[idx].copy()),
+            "attention_mask": torch.from_numpy(self._masks[idx].copy()).long(),
+            "label": self.labels[idx].float(),
+        }
+    @property
+    def masks(self):
+        if self._masks is None:
+            self.open_memmaps()
+        return self._masks
