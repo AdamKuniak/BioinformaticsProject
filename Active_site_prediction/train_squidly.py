@@ -1,18 +1,13 @@
 from torch.utils.data import DataLoader, random_split
 import torch
-import torch.nn as nn
-from torchmetrics.functional.classification import binary_matthews_corrcoef, binary_f1_score, binary_precision, binary_recall, binary_average_precision
-from data_utils import PrecomputedUniprotDataset
+from data_utils import PrecomputedSquidlyDataset
 from focal_loss import WeightedFocalLoss
-from model import ActiveSitePredictor, ActiveSitePredictorHead, IdentityNeck, AttentionNeck
+from model import ActiveSitePredictor, ActiveSitePredictorHead
 import numpy as np
 import os
-import datetime
 import wandb
 
 from train import (
-    compute_metrics,
-    find_optimal_threshold,
     train_one_epoch,
     evaluate,
     build_neck,
@@ -46,7 +41,7 @@ def print_final_summary(best_val_results, test_results, output_file="final_summa
 def train_squidly(
         device,
         neck_type="identity",
-        batch_size=32,
+        batch_size=128,
         warmup_epochs=5,
         total_epochs=80,
         lr=1e-3,
@@ -54,20 +49,19 @@ def train_squidly(
         neck_dropout=0.1,
         head_hidden_dim=512,
         val_split=0.1,  # 90:10 split
-        train_json="./data/squidly/uni14230_clean.json",
-        test_json="./data/squidly/uni3175_clean.json",
-        precomputed_root="./data/squidly/precomputed_embeddings",
+        precomputed_root_test="./data/squidly/precomputed_embeddings_3175",
+        precomputed_root_train="./data/squidly/precomputed_embeddings_14230",
+        last_n_layers=0
 ):
-    last_n_layers = 0  # set to >0 if using fine-tuning variant
 
-    run_dir = f"results/squidly/{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{neck_type}"
+    run_dir = f"results/squidly/model_{neck_type}_last_{last_n_layers}_unfrozen"
     os.makedirs(run_dir, exist_ok=True)
     model_dir = os.path.join(run_dir, "models")
     os.makedirs(model_dir, exist_ok=True)
 
     # ── Datasets ────────────────────────────────────────────────────────────
-    full_train_dataset = PrecomputedUniprotDataset(root=precomputed_root)
-    test_dataset = PrecomputedUniprotDataset(root=precomputed_root)
+    full_train_dataset = PrecomputedSquidlyDataset(root=precomputed_root_train)
+    test_dataset = PrecomputedSquidlyDataset(root=precomputed_root_test)
 
     val_size = int(len(full_train_dataset) * val_split)
     train_size = len(full_train_dataset) - val_size
@@ -76,8 +70,8 @@ def train_squidly(
     print(f"Train: {train_size} | Val: {val_size} | Test: {len(test_dataset)}")
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0, pin_memory=True)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0, pin_memory=True)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=0, pin_memory=True)
 
     # ── Model ────────────────────────────────────────────────────────────────
     neck = build_neck(neck_type, dropout=neck_dropout)
@@ -206,7 +200,7 @@ def train_squidly(
         "test/loss": test_loss,
     })
 
-    print_final_summary(best_val_results, test_results, output_file=os.path.join(run_dir, f"final_summary_{neck_type}.txt"))
+    print_final_summary(best_val_results, test_results, output_file=os.path.join(run_dir, f"final_summary.txt"))
 
     wandb.finish()
 
@@ -219,14 +213,11 @@ def main():
     np.random.seed(42)
     print(f"Using device: {device}")
 
-    train_squidly(
-        device,
-        neck_type="identity",
-        warmup_epochs=5,
-        total_epochs=100,
-        head_hidden_dim=512,
-        precomputed_root="./data/squidly/precomputed_embeddings",
-    )
+    #train_squidly(device, neck_type="identity", warmup_epochs=1, total_epochs=2, head_hidden_dim=512, precomputed_root_train="./data/squidly/precomputed_embeddings_14230", precomputed_root_test="./data/squidly/precomputed_embeddings_3175")
+    #train_squidly(device, neck_type="identity", warmup_epochs=5, total_epochs=100, head_hidden_dim=512, precomputed_root_train="./data/squidly/precomputed_embeddings_14230", precomputed_root_test="./data/squidly/precomputed_embeddings_3175")
+    #train_squidly(device, neck_type="attention", warmup_epochs=5, total_epochs=100, head_hidden_dim=512, precomputed_root_train="./data/squidly/precomputed_embeddings_14230", precomputed_root_test="./data/squidly/precomputed_embeddings_3175")
+    #train_squidly(device, batch_size=32, neck_type="identity", warmup_epochs=5, total_epochs=100, head_hidden_dim=512, precomputed_root_train="./data/squidly/precomputed_embeddings_14230_last_1_unfrozen", precomputed_root_test="./data/squidly/precomputed_embeddings_3175_last_1_unfrozen", last_n_layers=1)
+    train_squidly(device, batch_size=32, neck_type="identity", warmup_epochs=5, total_epochs=100, head_hidden_dim=512, precomputed_root_train="./data/squidly/precomputed_embeddings_14230_last_2_unfrozen", precomputed_root_test="./data/squidly/precomputed_embeddings_3175_last_2_unfrozen", last_n_layers=2)
 
 
 if __name__ == "__main__":

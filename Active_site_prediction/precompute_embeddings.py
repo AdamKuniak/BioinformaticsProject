@@ -40,10 +40,10 @@ def precompute_embeddings(dataset="uniprot", batch_size=16, pretrained_model="fa
         output_dir = (f"./data/m_csa/precomputed_embeddings_last_{last_n_layers}_unfrozen" if last_n_layers > 0 else "./data/m_csa/precomputed_embeddings")
         dataset = MCSADataset(tokenizer, max_length=max_length)
     elif dataset == "squidly_14230":
-        output_dir = (f"./data/squidly/precomputed_embeddings_last_{last_n_layers}_unfrozen" if last_n_layers > 0 else "./data/squidly/precomputed_embeddings")
+        output_dir = (f"./data/squidly/precomputed_embeddings_14230_last_{last_n_layers}_unfrozen" if last_n_layers > 0 else "./data/squidly/precomputed_embeddings_14230")
         dataset = UniprotDataset(tokenizer, root="./data/squidly/uni14230_clean.json", fold=None, max_length=max_length)
     elif dataset == "squidly_3175":
-        output_dir = (f"./data/squidly/precomputed_embeddings_last_{last_n_layers}_unfrozen" if last_n_layers > 0 else "./data/squidly/precomputed_embeddings")
+        output_dir = (f"./data/squidly/precomputed_embeddings_3175_last_{last_n_layers}_unfrozen" if last_n_layers > 0 else "./data/squidly/precomputed_embeddings_3175")
         dataset = UniprotDataset(tokenizer, root="./data/squidly/uni3175_clean.json", fold=None, max_length=max_length)
     else:
         raise ValueError(f"Unknown mode: '{dataset}'. Choose 'uniprot' or 'm-csa'.")
@@ -138,5 +138,5 @@ if __name__ == "__main__":
 
     precompute_embeddings(dataset="squidly_3175")
     precompute_embeddings(dataset="squidly_14230")
-    precompute_embeddings(dataset="squidly_3175", last_n_layers=1)
-    precompute_embeddings(dataset="squidly_14230", last_n_layers=1)
+    precompute_embeddings(dataset="uniprot", last_n_layers=0)
+    precompute_embeddings(dataset="uniprot", last_n_layers=1)
